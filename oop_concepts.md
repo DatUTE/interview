@@ -2,6 +2,48 @@
 
 ---
 
+## What is OOP?
+
+**Object-Oriented Programming** is a programming paradigm that organises code around **objects** — self-contained units that combine **data** (state) and **behaviour** (functions that operate on that state) — rather than around functions and logic alone.
+
+The central idea: model your problem as a set of interacting objects that mirror real-world or domain entities. Each object is responsible for managing its own state and exposing a well-defined interface to the outside world.
+
+```
+Procedural (C style):          OOP (C++ style):
+──────────────────────         ──────────────────────
+Data: plain structs            Data: private members inside a class
+Functions: free functions      Behaviour: methods that own and guard the data
+No invariant enforcement       Class enforces invariants in every operation
+Caller manages everything      Object manages its own lifetime and state
+```
+
+### OOP vs Other Paradigms
+
+| Paradigm | Core unit | Focus | Examples |
+|---|---|---|---|
+| **Procedural** | Function | Step-by-step instructions | C, Pascal |
+| **Object-Oriented** | Object | Entities with state + behaviour | C++, Java, Python |
+| **Functional** | Function (pure) | Transformations, immutability | Haskell, Erlang |
+| **Generic** | Template / type parameter | Algorithms independent of type | STL, Rust traits |
+
+> C++ is **multi-paradigm** — it supports OOP, procedural, generic, and functional styles. You choose the right tool per problem.
+
+### Why OOP?
+
+| Goal | How OOP achieves it |
+|---|---|
+| **Manage complexity** | Break large systems into self-contained objects |
+| **Code reuse** | Inheritance and composition share behaviour without duplication |
+| **Flexibility** | Polymorphism lets new types plug into existing code |
+| **Safety** | Encapsulation prevents accidental corruption of state |
+| **Maintainability** | Single Responsibility means changing one object doesn't break others |
+
+### One-line interview answer
+
+> *"OOP is a paradigm that models software as a collection of objects — each combining state and behaviour — and uses encapsulation, abstraction, inheritance, and polymorphism to manage complexity, promote reuse, and keep systems flexible and maintainable."*
+
+---
+
 ## The Four Pillars
 
 | Pillar | Core idea | C++ mechanism |
@@ -771,7 +813,466 @@ protected:
 
 ---
 
-## 10. Composition vs Inheritance
+## 10. Object Relationships
+
+UML defines five relationships between classes, each with different coupling strength and ownership semantics:
+
+```
+Strength (weakest → strongest):
+  Dependency → Association → Aggregation → Composition → Inheritance
+```
+
+### 1. Dependency (uses-a, temporary)
+
+A class **uses** another only within a method — no stored reference.
+
+```cpp
+class Printer {
+public:
+    // Printer depends on Document only for this call
+    void print(const Document& doc) {
+        doc.render();   // use, then forget
+    }
+};
+// Printer does NOT store a Document member
+```
+
+### 2. Association (knows-a, non-owning)
+
+A class **holds a reference or pointer** to another but does **not own** its lifetime.
+
+```cpp
+class Teacher {
+public:
+    explicit Teacher(const Department& dept) : dept_(dept) {}
+    std::string department_name() const { return dept_.name(); }
+private:
+    const Department& dept_;   // associated — Teacher doesn't create/destroy Department
+};
+```
+
+### 3. Aggregation (has-a, shared ownership)
+
+A "whole–part" relationship where the **part can exist independently** of the whole. The whole does not destroy the parts.
+
+```cpp
+class Team {
+public:
+    void add_member(Employee* e) { members_.push_back(e); }
+    // Team is destroyed → employees still exist elsewhere
+private:
+    std::vector<Employee*> members_;   // non-owning — raw pointers or weak_ptr
+};
+```
+
+### 4. Composition (owns-a, exclusive ownership)
+
+A "whole–part" relationship where the **part cannot exist without the whole**. The whole owns and destroys the parts.
+
+```cpp
+class Car {
+    Engine   engine_;    // Engine lives and dies with Car
+    Gearbox  gearbox_;
+public:
+    Car() : engine_(2000), gearbox_(6) {}
+    // ~Car() destroys engine_ and gearbox_ automatically
+};
+```
+
+### 5. Inheritance (is-a)
+
+Already covered in Section 4. Strongest coupling — use only for true taxonomic is-a relationships.
+
+### Relationship Summary
+
+| Relationship | Keyword | Lifetime | C++ idiom |
+|---|---|---|---|
+| Dependency | uses | Temporary (parameter) | Method parameter |
+| Association | knows | Independent | Raw pointer / reference member |
+| Aggregation | has (shared) | Part survives whole | `vector<T*>` / `weak_ptr` |
+| Composition | owns | Part dies with whole | Value member / `unique_ptr` |
+| Inheritance | is-a | Coupled | `: public Base` |
+
+---
+
+## 11. SOLID Principles
+
+Five design principles for maintainable OOP code:
+
+```
+S — Single Responsibility Principle
+O — Open/Closed Principle
+L — Liskov Substitution Principle
+I — Interface Segregation Principle
+D — Dependency Inversion Principle
+```
+
+### S — Single Responsibility Principle (SRP)
+
+> A class should have **one reason to change**.
+
+```cpp
+// VIOLATION — three reasons to change: parsing, validation, persistence
+class UserManager {
+public:
+    User  parse_json(const std::string& json);
+    bool  validate(const User& u);
+    void  save_to_db(const User& u);
+    void  send_welcome_email(const User& u);
+};
+
+// BETTER — each class has one responsibility
+class UserParser     { User parse(const std::string& json); };
+class UserValidator  { bool validate(const User& u); };
+class UserRepository { void save(const User& u); };
+class EmailService   { void send_welcome(const User& u); };
+```
+
+**Symptom of violation**: a class that needs to change whenever the DB schema, the email template, OR the JSON format changes.
+
+---
+
+### O — Open/Closed Principle (OCP)
+
+> Classes should be **open for extension, closed for modification**.
+
+```cpp
+// VIOLATION — adding a new shape requires modifying existing code
+class AreaCalculator {
+public:
+    double calculate(const Shape& s) {
+        if (s.type == "circle")    return M_PI * s.r * s.r;
+        if (s.type == "rectangle") return s.w * s.h;
+        // Adding triangle → must modify this function
+    }
+};
+
+// BETTER — extend via polymorphism, no modification needed
+class Shape {
+public:
+    virtual double area() const = 0;
+    virtual ~Shape() = default;
+};
+class Circle    : public Shape { double area() const override { return M_PI*r_*r_; } double r_; };
+class Rectangle : public Shape { double area() const override { return w_*h_; }      double w_,h_; };
+class Triangle  : public Shape { double area() const override { return 0.5*b_*h_; }  double b_,h_; };
+
+// AreaCalculator never changes — new shapes just add new classes
+double total(const std::vector<std::unique_ptr<Shape>>& shapes) {
+    double sum = 0;
+    for (auto& s : shapes) sum += s->area();
+    return sum;
+}
+```
+
+**C++ OCP mechanisms**: virtual functions, templates, std::function, strategy pattern.
+
+---
+
+### L — Liskov Substitution Principle (LSP)
+
+> Derived class objects must be **substitutable** for base class objects without changing program correctness.
+
+```cpp
+// VIOLATION — Square breaks Rectangle's contract
+class Rectangle {
+public:
+    virtual void set_width(int w)  { w_ = w; }
+    virtual void set_height(int h) { h_ = h; }
+    int area() const { return w_ * h_; }
+protected:
+    int w_, h_;
+};
+
+class Square : public Rectangle {
+public:
+    void set_width(int w)  override { w_ = h_ = w; } // side effect!
+    void set_height(int h) override { w_ = h_ = h; }
+};
+
+void test(Rectangle& r) {
+    r.set_width(4);
+    r.set_height(5);
+    assert(r.area() == 20);   // FAILS for Square — both sides became 5
+}
+
+Square sq;
+test(sq);   // breaks the invariant assumed by test()
+
+// FIX — don't inherit; make them siblings under IShape
+class IShape    { virtual int area() const = 0; };
+class Rectangle : public IShape { /* ... */ };
+class Square    : public IShape { /* ... */ };
+```
+
+**LSP checklist:**
+- Preconditions: derived may only **weaken** (accept more)
+- Postconditions: derived may only **strengthen** (guarantee more)
+- Invariants: derived must **preserve** all base invariants
+- No new exceptions that base doesn't throw
+
+---
+
+### I — Interface Segregation Principle (ISP)
+
+> Clients should **not be forced to depend on interfaces they do not use**. Split fat interfaces into small, focused ones.
+
+```cpp
+// VIOLATION — fat interface forces all implementors to define everything
+class IWorker {
+public:
+    virtual void work()  = 0;
+    virtual void eat()   = 0;   // Robot can't eat — forced to stub
+    virtual void sleep() = 0;   // Robot can't sleep — forced to stub
+    virtual ~IWorker() = default;
+};
+
+class Robot : public IWorker {
+    void work()  override { /* work */ }
+    void eat()   override {}    // forced stub — meaningless
+    void sleep() override {}    // forced stub — meaningless
+};
+
+// BETTER — segregate into focused interfaces
+class IWorkable { public: virtual void work()  = 0; virtual ~IWorkable() = default; };
+class IEatable  { public: virtual void eat()   = 0; virtual ~IEatable()  = default; };
+class ISleepable{ public: virtual void sleep() = 0; virtual ~ISleepable()= default; };
+
+class Human : public IWorkable, public IEatable, public ISleepable {
+    void work()  override { /* work */ }
+    void eat()   override { /* eat  */ }
+    void sleep() override { /* sleep*/ }
+};
+
+class Robot : public IWorkable {
+    void work()  override { /* work */ }
+    // Only implements what it actually does
+};
+```
+
+**Rule of thumb**: if a class has to implement methods with empty bodies or throw `NotImplemented`, the interface is too fat — split it.
+
+---
+
+### D — Dependency Inversion Principle (DIP)
+
+> High-level modules should **not depend on low-level modules**. Both should depend on **abstractions**.
+
+```cpp
+// VIOLATION — OrderService (high-level) depends on MySQLDatabase (low-level)
+class MySQLDatabase {
+public:
+    void save_order(const Order& o) { /* mysql specific */ }
+};
+
+class OrderService {
+    MySQLDatabase db_;   // tightly coupled to MySQL
+public:
+    void place(const Order& o) { db_.save_order(o); }
+};
+// Switching to PostgreSQL → must change OrderService
+
+// CORRECT — both depend on IDatabase abstraction
+class IDatabase {
+public:
+    virtual void save_order(const Order& o) = 0;
+    virtual ~IDatabase() = default;
+};
+
+class MySQLDatabase    : public IDatabase { void save_order(const Order&) override { /*mysql*/ } };
+class PostgresDatabase : public IDatabase { void save_order(const Order&) override { /*pg*/   } };
+
+class OrderService {
+    IDatabase& db_;   // depends on abstraction
+public:
+    explicit OrderService(IDatabase& db) : db_(db) {}
+    void place(const Order& o) { db_.save_order(o); }
+};
+
+// Wire-up (composition root):
+MySQLDatabase db;
+OrderService  svc(db);   // inject concrete implementation
+```
+
+**DIP ≠ DI**: DIP is the *architectural principle*. DI (Dependency Injection) is one *technique* to achieve it.
+
+### SOLID Quick Reference
+
+| | Principle | Symptom of violation | Fix |
+|---|---|---|---|
+| **S** | Single Responsibility | Class changes for multiple unrelated reasons | Split into focused classes |
+| **O** | Open/Closed | Adding a feature requires modifying existing code | Extend via polymorphism / strategy |
+| **L** | Liskov Substitution | Derived class breaks base class contracts | Fix hierarchy or remove inheritance |
+| **I** | Interface Segregation | Clients implement empty/stub methods | Split fat interfaces |
+| **D** | Dependency Inversion | High-level depends on concrete low-level | Depend on abstractions, inject implementations |
+
+---
+
+## 12. Type Casting in OOP
+
+### The Four C++ Casts
+
+```cpp
+static_cast<T>(expr)      // compile-time checked, related types
+dynamic_cast<T>(expr)     // runtime checked, polymorphic types only
+const_cast<T>(expr)       // add/remove const (use sparingly)
+reinterpret_cast<T>(expr) // bit-level reinterpret (unsafe, rarely needed)
+```
+
+### `static_cast` — Compile-Time Cast
+
+```cpp
+// Upcasting (derived → base) — always safe, implicit
+Derived* d = new Derived();
+Base* b = d;               // implicit upcast — fine
+Base* b2 = static_cast<Base*>(d);  // explicit — also fine
+
+// Downcasting (base → derived) — unsafe if wrong type, NO runtime check
+Base* b = new Base();      // actually a Base, not Derived
+Derived* d = static_cast<Derived*>(b);  // compiles, but accessing d is UB!
+d->derived_only_method();  // UB — b is not a Derived
+
+// Safe use: when you KNOW the type from context
+void process(Base* b) {
+    // some logic guarantees b is always Derived here
+    Derived* d = static_cast<Derived*>(b);  // ok if truly guaranteed
+}
+```
+
+### `dynamic_cast` — Runtime Type Check
+
+Requires at least one virtual function in the hierarchy (needs vtable/RTTI).
+
+```cpp
+class Base    { public: virtual ~Base() {} };
+class Derived : public Base { public: void special() {} };
+class Other   : public Base {};
+
+Base* b = new Derived();
+
+// Pointer cast — returns nullptr on failure (does NOT throw)
+if (Derived* d = dynamic_cast<Derived*>(b)) {
+    d->special();   // safe — b really is a Derived
+}
+
+// Reference cast — throws std::bad_cast on failure
+try {
+    Derived& d = dynamic_cast<Derived&>(*b);
+    d.special();
+} catch (const std::bad_cast& e) {
+    // b is not a Derived
+}
+
+// Failed cast
+Base* b2 = new Other();
+Derived* d2 = dynamic_cast<Derived*>(b2);   // returns nullptr
+assert(d2 == nullptr);
+
+// Sideways cast (between sibling classes in multiple inheritance)
+class IA { public: virtual ~IA() {} };
+class IB { public: virtual ~IB() {} };
+class C : public IA, public IB {};
+
+IA* ia = new C();
+IB* ib = dynamic_cast<IB*>(ia);   // sideways — only dynamic_cast can do this
+```
+
+### `static_cast` vs `dynamic_cast`
+
+| | `static_cast` | `dynamic_cast` |
+|---|---|---|
+| Check | Compile-time | Runtime (RTTI) |
+| Speed | Zero overhead | ~10–50 ns (vtable lookup) |
+| Failure on wrong type | UB (silent) | nullptr / `bad_cast` (safe) |
+| Requires virtual? | No | Yes |
+| Downcast when type known | ✓ Preferred | Works but wasteful |
+| Downcast when type unknown | Dangerous | ✓ Correct tool |
+| Sideways cast | ✗ Impossible | ✓ Works |
+
+```cpp
+// Prefer static_cast: when you control the type (factory returned it)
+std::unique_ptr<Base> make() { return std::make_unique<Derived>(); }
+auto b = make();
+Derived* d = static_cast<Derived*>(b.get());  // we know it's Derived
+
+// Prefer dynamic_cast: visitor-style, unknown runtime type
+void handle(Base* b) {
+    if (auto* d = dynamic_cast<Derived*>(b)) { /* ... */ }
+    else if (auto* o = dynamic_cast<Other*>(b)) { /* ... */ }
+}
+// But: this pattern is usually a sign you need virtual dispatch instead
+```
+
+### `const_cast` — Remove/Add const
+
+```cpp
+void legacy_c_api(char* str);          // old API doesn't take const char*
+
+void call_legacy(const std::string& s) {
+    // Remove const to call C API — safe only if API doesn't modify str
+    legacy_c_api(const_cast<char*>(s.c_str()));
+}
+
+// NEVER remove const from a truly const object — UB
+const int x = 42;
+int* p = const_cast<int*>(&x);
+*p = 99;   // UB — x was declared const, modification is undefined
+```
+
+### RTTI — `typeid`
+
+```cpp
+#include <typeinfo>
+
+Base* b = new Derived();
+
+// typeid on pointer dereferences through virtual dispatch
+std::cout << typeid(*b).name();         // implementation-defined, e.g. "7Derived"
+
+// Exact type comparison
+if (typeid(*b) == typeid(Derived)) { /* b points to exactly a Derived */ }
+// Note: typeid gives exact type, NOT "is-a" — use dynamic_cast for is-a check
+
+// Disable RTTI: -fno-rtti (GCC/Clang) → dynamic_cast and typeid won't work
+```
+
+---
+
+## 13. Covariant Return Types
+
+A derived class can **narrow the return type** of a virtual function — the return type must be covariant (a derived pointer/reference of the base's return type).
+
+```cpp
+class Base {
+public:
+    virtual Base* clone() const {
+        return new Base(*this);
+    }
+    virtual ~Base() = default;
+};
+
+class Derived : public Base {
+public:
+    // Covariant return: returns Derived* instead of Base*
+    Derived* clone() const override {
+        return new Derived(*this);   // caller gets Derived* directly — no cast needed
+    }
+};
+
+Derived d;
+Derived* d2 = d.clone();    // no static_cast needed — covariant return type
+Base*    b  = d.clone();    // also fine — implicit upcast
+
+// Without covariant return:
+// Base* clone() override { return new Derived(*this); }
+// caller: Derived* d2 = static_cast<Derived*>(d.clone()); // extra cast
+```
+
+**Use case**: prototype/clone pattern — the derived `clone()` is called via virtual dispatch but returns the exact type when called on a derived reference directly.
+
+---
+
+## 15. Composition vs Inheritance
 
 **Prefer composition over inheritance** (Effective C++ Item 38) — inheritance is the strongest coupling in OOP.
 
@@ -808,7 +1309,7 @@ private:
 
 ---
 
-## 11. Composition vs Dependency Injection
+## 16. Composition vs Dependency Injection
 
 They are **not opposites** — DI is a *way of doing* composition. The distinction is in **who creates the dependency**.
 
@@ -1062,7 +1563,7 @@ DI does not replace composition — it **refines it** by inverting control over 
 
 ---
 
-## 12. Common OOP Design Patterns
+## 17. Common OOP Design Patterns
 
 ### Singleton — One Instance
 

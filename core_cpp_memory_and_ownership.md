@@ -87,7 +87,172 @@ inspect(new_owner.get());
 
 ---
 
-## 2. Move Semantics: `std::move`, Rvalue References, Move Constructor/Assignment
+## 2. Shallow Copy vs Deep Copy
+
+### The Core Problem
+
+The **compiler-generated copy** (copy constructor + copy assignment) performs a **memberwise copy** — each data member is copied by value. For pointer members this means copying the *address*, not the *data behind it*. Both objects now share the same heap block.
+
+```
+Original:                    Shallow copy:                Deep copy:
+┌────────────────┐           ┌────────────────┐           ┌────────────────┐
+│ data_ ─────────┼──┐        │ data_ ─────────┼──┐        │ data_ ─────────┼──┐
+│ size_ = 3      │  │        │ size_ = 3      │  │        │ size_ = 3      │  │
+└────────────────┘  │        └────────────────┘  │        └────────────────┘  │
+                    ▼                             │                            ▼
+              ┌──────────┐                        │                      ┌──────────┐
+              │  1, 2, 3 │◀───────────────────────┘                      │  1, 2, 3 │
+              └──────────┘                                               └──────────┘
+           SHARED — double free!                                    independent copy
+```
+
+### Shallow Copy (compiler default)
+
+```cpp
+struct Shallow {
+    int* data;
+    int  size;
+};
+
+Shallow a;
+a.data = new int[3]{1, 2, 3};
+a.size = 3;
+
+Shallow b = a;        // memberwise copy: b.data == a.data (same pointer!)
+
+b.data[0] = 99;       // silently corrupts a's data too
+delete[] b.data;      // frees the block
+// a.data is now dangling → UB on next access or double-free on a's dtor
+```
+
+### Deep Copy — allocate + copy the resource
+
+```cpp
+class Buffer {
+public:
+    explicit Buffer(int n) : size_(n), data_(new int[n]{}) {}
+
+    // Deep copy constructor
+    Buffer(const Buffer& other)
+        : size_(other.size_)
+        , data_(new int[other.size_])           // new allocation
+    {
+        std::copy(other.data_, other.data_ + size_, data_);
+    }
+
+    // Copy assignment — copy-and-swap idiom (exception-safe)
+    Buffer& operator=(Buffer other) noexcept {  // 'other' is already a deep copy
+        swap(*this, other);                     // exchange internals
+        return *this;                           // old data freed by other's dtor
+    }
+
+    // Move constructor — transfer ownership, no allocation
+    Buffer(Buffer&& other) noexcept
+        : size_(std::exchange(other.size_, 0))
+        , data_(std::exchange(other.data_, nullptr))
+    {}
+
+    // Move assignment
+    Buffer& operator=(Buffer&& other) noexcept {
+        if (this != &other) {
+            delete[] data_;
+            data_ = std::exchange(other.data_, nullptr);
+            size_ = std::exchange(other.size_, 0);
+        }
+        return *this;
+    }
+
+    ~Buffer() { delete[] data_; }
+
+    friend void swap(Buffer& a, Buffer& b) noexcept {
+        std::swap(a.size_, b.size_);
+        std::swap(a.data_, b.data_);
+    }
+
+private:
+    int  size_;
+    int* data_;
+};
+
+Buffer a(3);       // [1, 2, 3] on heap
+Buffer b = a;      // deep copy → b has its own [1, 2, 3]
+b.data_[0] = 99;   // a is unaffected
+// both dtors run safely — no double-free
+```
+
+### When Shallow Copy Is Correct
+
+```cpp
+// 1. Non-owning / observer types — shallow IS the right semantic
+struct StringView {
+    const char* data;   // borrows, does not own
+    int         size;
+};
+// Copying a view copies the "window", not the underlying string — correct.
+
+// 2. Value types with no heap resources — shallow == deep
+struct Point { int x, y; };
+Point p2 = p1;   // copies x and y — nothing to deep-copy
+
+// 3. STL containers already deep copy for you
+std::vector<int> v1 = {1, 2, 3};
+std::vector<int> v2 = v1;    // deep copy — v2 owns its own buffer
+v2[0] = 99;                  // v1[0] still 1
+
+std::string s1 = "hello";
+std::string s2 = s1;         // deep copy (SSO or heap)
+```
+
+### Copy vs Move
+
+```cpp
+Buffer a(1024);
+
+Buffer b = a;            // COPY — new allocation + memcpy (O(n))
+Buffer c = std::move(a); // MOVE — pointer swap, no allocation (O(1))
+                         // a is now empty (data_ = nullptr, size_ = 0)
+```
+
+| | Shallow Copy | Deep Copy | Move |
+|---|---|---|---|
+| Allocates memory | No | Yes | No |
+| Independent after? | No — shared | Yes | Yes |
+| Cost | O(1) | O(n) | O(1) |
+| Source still valid? | Yes | Yes | Valid but empty |
+| Risk | Double-free | None | Don't use moved-from |
+
+### Decision Rule
+
+```
+Does your type own a resource (heap, fd, socket, mutex)?
+│
+├─ No  → Rule of Zero: compiler-generated copy is correct
+│
+└─ Yes → Option A: Rule of Five
+│         write: deep copy ctor + copy assign + move ctor + move assign + dtor
+│
+         Option B: Rule of Zero + RAII member (preferred)
+          store resource in vector/string/unique_ptr — they handle it for you
+```
+
+### Copy-and-Swap Idiom Explained
+
+```cpp
+// copy assignment via copy-and-swap:
+Buffer& operator=(Buffer other) noexcept {  // 1. 'other' is deep-copied by value
+    swap(*this, other);                     // 2. swap internals
+    return *this;                           // 3. other (now holding old data) is destroyed
+}
+
+// Benefits:
+// - Exception safe: if the copy (step 1) throws, *this is unchanged
+// - Self-assignment safe: copy of self is made, then swapped — correct
+// - No code duplication: reuses copy ctor + dtor
+```
+
+---
+
+## 3. Move Semantics: `std::move`, Rvalue References, Move Constructor/Assignment
 
 ### Lvalue vs Rvalue
 
@@ -186,7 +351,7 @@ void wrapper(T&& arg) {
 
 ---
 
-## 3. Smart Pointers: `unique_ptr`, `shared_ptr`, `weak_ptr`
+## 4. Smart Pointers: `unique_ptr`, `shared_ptr`, `weak_ptr`
 
 ### `std::unique_ptr` — Single Ownership
 

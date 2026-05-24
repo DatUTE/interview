@@ -20,6 +20,9 @@ Complete reference set for senior-level C++ engineering interviews.
 | 10 | [cpp_templates.md](cpp_templates.md) | SFINAE, concepts (C++20), variadic templates, type traits, CRTP, TMP |
 | 11 | [smart_pointers.md](smart_pointers.md) | `unique_ptr`, `shared_ptr` control block, `weak_ptr`, `enable_shared_from_this`, cycles |
 | 12 | [networking.md](networking.md) | TCP/UDP, socket programming, epoll server, HTTP/2 vs HTTP/3, TLS handshake |
+| 13 | [system_design.md](system_design.md) | Interview framework, CAP theorem, scaling patterns, URL shortener, chat, feed, rate limiter, Snowflake ID |
+| 14 | [cpp_keywords.md](cpp_keywords.md) | `const`/`constexpr`/`consteval`/`constinit`, `noexcept`, `inline`, `extern`, `static`, `auto`, `decltype`, `override`, `final`, `explicit`, `mutable`, `volatile`, `thread_local`, attributes |
+| 15 | [low_latency.md](low_latency.md) | CPU pinning, NUMA, huge pages, lock-free SPSC, kernel bypass (DPDK), RDTSC timing, jitter elimination, startup sequence |
 
 ---
 
@@ -33,9 +36,10 @@ Complete reference set for senior-level C++ engineering interviews.
 | System programming | 2, 3, 8 |
 | Data structures | 6, 7 |
 | Algorithms & complexity | 7 |
-| Software design | 5, 9 |
-| Networking | 2, 8 |
+| Software design | 5, 9, 13 |
+| Networking | 2, 8, 13 |
 | Performance & profiling | 1, 3, 8, 10, 11 |
+| System design & architecture | 13 |
 
 ---
 
