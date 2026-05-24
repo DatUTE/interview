@@ -102,12 +102,12 @@ shared_ptr<T> on stack:
 ┌──────────┐           ┌─────────────────────────────────────────┐
 │ T object │           │  Control Block                          │
 └──────────┘           │  ┌───────────────────────────────────┐  │
-                        │  │ use_count  (atomic<long>)  = 1    │  │
-                        │  │ weak_count (atomic<long>)  = 1    │  │
-                        │  │ deleter    (type-erased)          │  │
-                        │  │ allocator  (type-erased)          │  │
-                        │  └───────────────────────────────────┘  │
-                        └─────────────────────────────────────────┘
+                       │  │ use_count  (atomic<long>)  = 1    │  │
+                       │  │ weak_count (atomic<long>)  = 1    │  │
+                       │  │ deleter    (type-erased)          │  │
+                       │  │ allocator  (type-erased)          │  │
+                       │  └───────────────────────────────────┘  │
+                       └─────────────────────────────────────────┘
 ```
 
 **Two atomic counters** (not one):
