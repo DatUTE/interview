@@ -24,6 +24,8 @@ Complete reference set for senior-level C++ engineering interviews.
 | 14 | [cpp_keywords.md](cpp_keywords.md) | `const`/`constexpr`/`consteval`/`constinit`, `noexcept`, `inline`, `extern`, `static`, `auto`, `decltype`, `override`, `final`, `explicit`, `mutable`, `volatile`, `thread_local`, attributes |
 | 15 | [low_latency.md](low_latency.md) | CPU pinning, NUMA, huge pages, lock-free SPSC, kernel bypass (DPDK), RDTSC timing, jitter elimination, startup sequence |
 | 16 | [embedded_systems.md](../embedded_systems.md) *(index → 12 files)* | GPIO, interrupts, NVIC, DMA, cache coherency, UART/SPI/I2C/CAN/USB, linker scripts, volatile, RTOS (FreeRTOS), priority inversion, power management, bootloader, OTA, JTAG/SWD, hard fault debug, embedded Linux, ISO 26262, secure boot, TrustZone |
+| 17 | [Rust/rust_00_index.md](../Rust/rust_00_index.md) *(index → 12 files)* | Ownership/borrowing/lifetimes, traits/generics, enums/pattern matching, iterators/closures, error handling, smart pointers (Box/Rc/Arc/RefCell), concurrency (Mutex/channels/Rayon), async/await (tokio/futures), modules/Cargo/workspaces, unsafe/FFI, advanced patterns (builder/type-state/macros), interview hot topics |
+| 18 | [OpenGL/opengl_00_index.md](../OpenGL/opengl_00_index.md) *(index → 10 files)* | Rendering pipeline, GLFW/GLAD context, VAO/VBO/EBO, GLSL shaders, textures, MVP transforms/camera, Phong/Blinn-Phong/PBR lighting, FBO/post-processing/deferred rendering, shadow mapping/normal maps/HDR/bloom/SSAO, compute shaders/DSA/instancing/indirect draw, GPU profiling/batching/LOD, interview hot topics |
 
 ---
 
@@ -43,6 +45,12 @@ Complete reference set for senior-level C++ engineering interviews.
 | System design & architecture | 13 |
 | Embedded systems (hardware → RTOS → Linux) | 16 |
 | Real-time & safety-critical systems | 16 |
+| Rust ownership & memory safety | 17 |
+| Rust concurrency & async | 17 |
+| Rust systems programming & FFI | 17 |
+| OpenGL rendering pipeline & shaders | 18 |
+| OpenGL lighting, shadows & post-processing | 18 |
+| OpenGL performance & modern techniques | 18 |
 
 ---
 
