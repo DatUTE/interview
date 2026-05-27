@@ -8,22 +8,197 @@
 
 | | Stack | Heap |
 |---|---|---|
-| Allocation | Automatic (function scope) | Manual (`new` / `malloc`) |
+| Allocation | Automatic on scope entry | Manual (`new` / `malloc`) |
 | Deallocation | Automatic on scope exit | Manual (`delete` / `free`) |
-| Size | Limited (~1–8 MB typical) | Large (limited by RAM) |
-| Speed | Very fast (just move stack pointer) | Slower (allocator overhead) |
-| Lifetime | Tied to scope | Until explicitly freed |
-| Fragmentation | None | Possible |
+| Size | Limited (~1–8 MB default) | Large (limited by RAM/VM) |
+| Speed | Extremely fast (single SP decrement) | Slower (allocator search + metadata) |
+| Lifetime | Tied to enclosing scope | Until explicitly freed |
+| Fragmentation | None | Possible over time |
+| Thread | Each thread has its own stack | Shared across all threads |
+| Access pattern | LIFO, contiguous, cache-friendly | Random, pointer-chased, cache-unfriendly |
 
-```cpp
-void example() {
-    int x = 42;           // stack — freed when function returns
-    int* p = new int(42); // heap — must manually delete
-    delete p;
-}
+---
+
+### What Lives on the Stack
+
+The stack holds everything whose **size is known at compile time** and whose **lifetime is bounded by a scope**.
+
+```
+High address
+┌─────────────────────────────┐
+│   main() frame              │
+│   ┌──────────────────────┐  │
+│   │ int argc        [4B] │  │  ← function parameters
+│   │ char** argv     [8B] │  │
+│   └──────────────────────┘  │
+│   ┌──────────────────────┐  │
+│   │ return address  [8B] │  │  ← where to jump after return
+│   │ saved rbp       [8B] │  │  ← previous frame pointer
+│   └──────────────────────┘  │
+├─────────────────────────────┤
+│   foo() frame               │
+│   ┌──────────────────────┐  │
+│   │ int x = 42      [4B] │  │  ← local variable
+│   │ double d        [8B] │  │  ← local variable
+│   │ char buf[64]   [64B] │  │  ← fixed-size local array
+│   │ Point p {x,y}   [8B] │  │  ← local struct (value type)
+│   │ int* ptr        [8B] │  │  ← pointer variable itself (not what it points to)
+│   └──────────────────────┘  │
+├─────────────────────────────┤  ← stack grows downward
+│   (unused stack space)      │
+└─────────────────────────────┘
+Low address
 ```
 
-**Key point**: Stack overflow happens when you exhaust stack space (deep recursion, large local arrays). Prefer stack allocation for small, short-lived objects.
+**Stored on the stack:**
+
+```cpp
+void foo(int param) {              // param         ← stack (copy of argument)
+    int x = 42;                    // x             ← stack
+    double d = 3.14;               // d             ← stack
+    char buf[64];                  // buf[64]       ← stack (fixed-size array)
+    int arr[8] = {1,2,3,4,5,6,7,8};// arr[8]       ← stack
+    Point p{1, 2};                 // p             ← stack (value type, all members)
+
+    int* ptr = new int(99);        // ptr           ← stack (the pointer variable)
+                                   // *ptr = 99     ← HEAP (what the pointer points to)
+
+    std::string s = "hi";          // s (metadata)  ← stack (ptr+size+capacity or SSO buf)
+                                   // s heap buffer ← HEAP (if string > SSO threshold ~15 chars)
+
+    std::vector<int> v = {1,2,3};  // v (metadata)  ← stack (data*+size+capacity, 24 bytes)
+                                   // v.data()      ← HEAP (the actual int elements)
+
+    auto lam = [x]() { return x; };// lam           ← stack (captured copy of x)
+
+    delete ptr;
+}   // ← ALL stack variables freed automatically here (LIFO order)
+```
+
+**Key rule:** The *object itself* (its bytes) lives where it was declared. A `std::vector` declared as a local has its 24-byte metadata on the stack; the elements it manages are on the heap.
+
+---
+
+### What Lives on the Heap
+
+The heap holds everything allocated with **`new`**, **`malloc`**, or indirectly by containers/smart pointers — anything whose **size is only known at runtime** or whose **lifetime must outlive its declaring scope**.
+
+```
+┌─────────────────────────────────────────────┐
+│                   HEAP                      │
+│                                             │
+│  [hdr][   int[1000]   ][hdr][Widget][hdr].. │
+│         ↑ new int[n]         ↑ make_unique  │
+│                                             │
+│  [ctrl_blk][  string data  ][  vec elems  ] │
+│      ↑ shared_ptr              ↑ vector     │
+│                                             │
+│  fragmented, non-contiguous, heap metadata  │
+│  (size headers) precede each allocation     │
+└─────────────────────────────────────────────┘
+```
+
+**Stored on the heap:**
+
+```cpp
+// 1. Explicit dynamic allocation
+int*    p  = new int(42);          // int value lives on heap
+int*    arr = new int[n];          // runtime-sized array — must be heap
+Widget* w  = new Widget();         // object lives on heap
+
+// 2. Smart pointer managed objects
+auto up = std::make_unique<Widget>();   // Widget on heap
+auto sp = std::make_shared<Widget>();   // Widget + control block on heap
+
+// 3. STL container elements
+std::vector<int> v(1000);         // 1000 ints on heap (v itself on stack)
+std::string s = "long string..."; // character buffer on heap (if > SSO)
+std::map<int,int> m;              // red-black tree nodes, each on heap
+
+// 4. Objects that must outlive their creating scope
+std::unique_ptr<Widget> make_widget() {
+    return std::make_unique<Widget>(); // Widget lives on heap → returned to caller
+}   // stack frame gone, but heap object survives
+
+// 5. Large objects (avoid stack overflow)
+// int big[1000000];              // 4 MB on stack → stack overflow!
+auto big = std::make_unique<int[]>(1000000); // 4 MB on heap → fine
+```
+
+---
+
+### What Lives in Neither (Static / Global Storage)
+
+```cpp
+// Global variables — .data or .bss segment (not stack, not heap)
+int g_count = 0;                   // .data  (initialized)
+static double g_ratio;             // .bss   (zero-initialized)
+
+// String literals — .rodata segment (read-only)
+const char* msg = "hello";         // "hello" is in .rodata, msg ptr is on stack
+
+// Static local variables — .data segment, initialized once
+void foo() {
+    static int call_count = 0;     // survives across calls, NOT on stack
+    ++call_count;
+}
+
+// Thread-local storage
+thread_local int tls_id = 0;       // one copy per thread, in TLS segment
+```
+
+---
+
+### Quick Decision: Stack or Heap?
+
+```
+Is the size known at compile time?
+├─ No  → heap (new / vector / unique_ptr)
+└─ Yes → Does it need to outlive the current scope?
+          ├─ Yes → heap (return via smart pointer)
+          └─ No  → Is it small enough? (rough guide: < 1–16 KB)
+                    ├─ Yes → stack (local variable, struct, small array)
+                    └─ No  → heap (large array, big object)
+```
+
+```cpp
+// PREFER stack when possible — faster, no leak risk, cache-friendly
+int result = compute();             // stack — ideal
+
+// USE heap when necessary
+auto buf = std::make_unique<char[]>(file_size);  // runtime size → heap
+return std::make_unique<Connection>(fd);          // must outlive scope → heap
+```
+
+---
+
+### Common Mistakes
+
+```cpp
+// 1. Returning pointer/reference to stack variable → dangling
+int& bad_ref() {
+    int x = 42;
+    return x;    // x is destroyed on return → dangling reference → UB
+}
+
+// 2. Stack overflow from large local array
+void foo() {
+    int data[10'000'000]; // ~40 MB on stack → immediate crash
+    // Fix: std::vector<int> data(10'000'000);  → heap
+}
+
+// 3. Forgetting that container elements are on heap
+std::vector<int*> ptrs;
+{
+    int x = 10;
+    ptrs.push_back(&x);   // pushing ADDRESS of a stack variable
+}
+// x is gone, ptrs[0] is dangling → UB
+
+// 4. Assuming pointer on stack means data on stack
+int* p = new int(5);   // p = 8 bytes on stack, *p = 4 bytes on heap
+delete p;              // must explicitly free the heap part
+```
 
 ---
 
@@ -379,19 +554,172 @@ take(std::move(p2));
 
 ### `std::shared_ptr` — Shared Ownership
 
-- Maintains a **reference count** (atomic, thread-safe increment/decrement)
-- Object destroyed when last `shared_ptr` to it is destroyed
-- Overhead: heap allocation for control block + atomic ops on copy/destroy
+Every `shared_ptr<T>` instance is two pointers: one to the **managed object**, one to a **control block** that lives on the heap and governs the object's lifetime.
 
-```cpp
-auto sp1 = std::make_shared<Widget>();  // one allocation for object + control block
-auto sp2 = sp1;  // ref count = 2
+#### What the Control Block Stores
 
-sp1.reset();     // ref count = 1
-// sp2 goes out of scope → ref count = 0 → Widget destroyed
+```
+┌─────────────────────────────────────────────────────┐
+│                   Control Block                     │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  use_count   : atomic<long>                 │    │  ← # of shared_ptr instances
+│  │  weak_count  : atomic<long>                 │    │  ← # of weak_ptr + 1
+│  ├─────────────────────────────────────────────┤    │
+│  │  deleter     : type-erased callable         │    │  ← how to destroy the object
+│  │  allocator   : type-erased allocator        │    │  ← how to free this block
+│  ├─────────────────────────────────────────────┤    │
+│  │  ptr to T    : T*  (or T embedded here)     │    │  ← points to managed object
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
 ```
 
-**Use `make_shared` over `new`**: single allocation, exception-safe.
+| Field | Type | Purpose |
+|---|---|---|
+| `use_count` | `atomic<long>` | Counts live `shared_ptr` copies. Object destroyed when hits 0 |
+| `weak_count` | `atomic<long>` | Counts `weak_ptr` + 1 sentinel. Control block freed when hits 0 |
+| `deleter` | type-erased callable | Custom destructor/free function — stored even if default |
+| `allocator` | type-erased allocator | How to free the control block itself |
+| object ptr | `T*` | Pointer back to managed object (or object embedded inline with `make_shared`) |
+
+#### Two Separate Counters — Why?
+
+```
+use_count  controls: when to DESTROY the object
+weak_count controls: when to FREE the control block
+
+Timeline:
+  shared_ptr created   → use_count=1, weak_count=1 (the +1 sentinel)
+  shared_ptr copied    → use_count++
+  weak_ptr created     → weak_count++
+  shared_ptr destroyed → use_count--
+                          if use_count == 0 → destroy object (call destructor + deleter)
+                          weak_count--        (remove the sentinel)
+  weak_ptr destroyed   → weak_count--
+                          if weak_count == 0 → free control block memory
+```
+
+```cpp
+auto sp1 = std::make_shared<int>(42);
+// use_count=1, weak_count=1
+
+auto sp2 = sp1;
+// use_count=2, weak_count=1
+
+std::weak_ptr<int> wp = sp1;
+// use_count=2, weak_count=2
+
+sp1.reset();
+// use_count=1, weak_count=2
+
+sp2.reset();
+// use_count=0 → *int destroyed
+// weak_count=1 (sentinel removed) → weak_count=1
+
+// wp still alive → control block still alive (weak_count=1)
+wp.expired();  // true — object gone, block survives
+
+// wp goes out of scope → weak_count=0 → control block freed
+```
+
+#### Deleter — Type Erasure
+
+The deleter is stored in the control block with **type erasure** — `shared_ptr<T>` can hold any callable as deleter without changing the template type.
+
+```cpp
+// Default deleter: calls delete
+auto sp1 = std::make_shared<Widget>();
+// control block stores: [](Widget* p){ delete p; }
+
+// Custom deleter: calls fclose
+std::shared_ptr<FILE> fp(fopen("x.txt", "r"), fclose);
+// control block stores: fclose (function pointer)
+
+// Lambda deleter
+auto pool_return = [&pool](Widget* p){ pool.release(p); };
+std::shared_ptr<Widget> sp2(pool.acquire(), pool_return);
+// control block stores: the lambda (with captured pool reference)
+
+// Array deleter (pre-C++17)
+std::shared_ptr<int> arr(new int[10], [](int* p){ delete[] p; });
+
+// All three are shared_ptr<T> — deleter type is erased into the control block
+// The type of shared_ptr<T> does NOT change based on deleter type
+// (unlike unique_ptr<T, Deleter> which encodes deleter in the template)
+```
+
+#### `make_shared` vs `shared_ptr(new T)` — Memory Layout
+
+```
+shared_ptr<Widget>(new Widget):         make_shared<Widget>():
+Two separate allocations:               One contiguous allocation:
+
+  Heap alloc 1:                           Heap alloc (single):
+  ┌──────────────┐                        ┌──────────────────────────┐
+  │  Widget data │◄──── sp.ptr_           │  Control Block           │
+  └──────────────┘                        │  ┌────────────────────┐  │
+                                          │  │ use_count          │  │
+  Heap alloc 2:                           │  │ weak_count         │  │
+  ┌──────────────────────┐                │  │ deleter            │  │
+  │  Control Block       │◄── sp.ctrl_   │  │ allocator          │  │
+  │  use_count           │               │  └────────────────────┘  │
+  │  weak_count          │               │  Widget data             │◄── sp.ptr_
+  │  deleter             │               │  (embedded, adjacent)    │
+  │  allocator           │               └──────────────────────────┘
+  └──────────────────────┘◄── sp.ctrl_
+
+  Cache miss likely between              Object and control block
+  object and control block               always in same cache line
+```
+
+| | `shared_ptr(new T)` | `make_shared<T>()` |
+|---|---|---|
+| Allocations | 2 (object + control block) | 1 (fused) |
+| Cache locality | Poor (two separate blocks) | Good (adjacent) |
+| Exception safety | Risky (see below) | Safe |
+| Object freed when | `use_count == 0` | `weak_count == 0` (fused memory) |
+| Custom deleter | Yes | No (uses `delete`) |
+| Private constructor | Works with `new` | Needs friend or passkey |
+
+**Exception safety pitfall with `new`:**
+
+```cpp
+// UNSAFE (pre-C++17 evaluation order)
+f(shared_ptr<Widget>(new Widget), compute_priority());
+// Possible order: new Widget → compute_priority() [throws] → shared_ptr ctor
+// Result: Widget leaked because shared_ptr was never constructed
+
+// SAFE: make_shared is atomic — no gap between allocation and ownership
+f(make_shared<Widget>(), compute_priority());
+```
+
+#### `shared_ptr` Thread Safety
+
+```cpp
+// The CONTROL BLOCK is thread-safe (atomic counters)
+// The POINTED-TO OBJECT is NOT automatically thread-safe
+
+std::shared_ptr<int> sp = std::make_shared<int>(0);
+
+// SAFE: copying shared_ptr across threads (use_count is atomic)
+std::shared_ptr<int> sp2 = sp;   // thread 1
+std::shared_ptr<int> sp3 = sp;   // thread 2 — safe, atomic increment
+
+// UNSAFE: two threads modifying the same shared_ptr variable
+// Thread 1: sp = other;    // not atomic on the pointer pair
+// Thread 2: sp.reset();    // data race on sp itself
+
+// Fix: use atomic<shared_ptr<T>> (C++20)
+std::atomic<std::shared_ptr<int>> atomic_sp = std::make_shared<int>(0);
+atomic_sp.store(std::make_shared<int>(42));  // lock-free on most platforms
+
+// Fix (pre-C++20): protect sp itself with a mutex
+std::mutex mu;
+{
+    std::lock_guard lock(mu);
+    sp = other;
+}
+```
 
 ---
 
@@ -420,25 +748,156 @@ if (auto locked = wp.lock()) {
 
 ### Circular Reference Problem
 
-```cpp
-struct Node {
-    std::shared_ptr<Node> next;  // strong ref
-    std::shared_ptr<Node> prev;  // strong ref — PROBLEM
-};
+#### What Is a Circular Reference?
 
-auto a = std::make_shared<Node>();
-auto b = std::make_shared<Node>();
-a->next = b;
-b->prev = a;  // circular! ref counts never reach 0 → memory leak
+A **circular reference** (also called a **reference cycle**) occurs when two or more objects hold `shared_ptr` to each other, directly or indirectly, forming a closed loop of ownership. Because `shared_ptr` only destroys an object when its `use_count` reaches zero, and each object in the cycle keeps the other's count above zero, **neither object is ever destroyed** — even when no external code holds a reference to either one.
+
+This is a **memory leak that the compiler cannot detect** and that sanitizers may not always catch.
+
+#### How the Cycle Traps the Count
+
+```
+Without cycle — normal cleanup:
+
+  external: sp_a ──────────────────► [Node A]  use_count = 1
+                                        │
+                                      next ──► [Node B]  use_count = 1
+
+  sp_a goes out of scope:
+    Node A: use_count 1 → 0  → destroyed → releases next → Node B: use_count 1 → 0 → destroyed ✓
+
+
+With cycle — leak:
+
+  external: sp_a ──► [Node A]  use_count = 2  (sp_a + B's prev)
+                        │  ▲
+                      next │ prev (strong)
+                        │  │
+                        ▼  │
+                     [Node B]  use_count = 2  (sp_b + A's next)
+                        ▲
+  external: sp_b ───────┘
+
+  sp_a goes out of scope: Node A use_count 2 → 1  (B still holds it) — NOT destroyed
+  sp_b goes out of scope: Node B use_count 2 → 1  (A still holds it) — NOT destroyed
+
+  Both nodes are now UNREACHABLE from outside but use_count = 1 ≠ 0
+  → neither destructor runs → memory leaked forever
 ```
 
-**Fix**: make the back-pointer `weak_ptr`:
+#### Code: The Leak
 
 ```cpp
 struct Node {
-    std::shared_ptr<Node> next;
-    std::weak_ptr<Node> prev;  // non-owning back reference
+    std::string name;
+    std::shared_ptr<Node> next;   // strong — owns next node
+    std::shared_ptr<Node> prev;   // strong — PROBLEM: owns previous node too
+    ~Node() { std::cout << name << " destroyed\n"; }
 };
+
+{
+    auto a = std::make_shared<Node>("A");
+    auto b = std::make_shared<Node>("B");
+
+    a->next = b;   // A holds B  → B use_count = 2
+    b->prev = a;   // B holds A  → A use_count = 2
+}
+// scope ends: local sp's release → use_count drops to 1 each
+// "A destroyed" — NEVER printed
+// "B destroyed" — NEVER printed
+// Both objects leak until process exits
+```
+
+#### Why `weak_ptr` Breaks the Cycle
+
+`weak_ptr` observes an object **without participating in ownership** — it does not increment `use_count`. Breaking just one link in the cycle with `weak_ptr` is enough to allow cleanup.
+
+```
+Ownership direction (strong links only) — must be acyclic:
+
+  [Node A] ──next (strong)──► [Node B]
+  [Node B] ──prev (weak)────► [Node A]   ← no ownership, just navigation
+
+  sp_a / sp_b go out of scope:
+    Node A: use_count 1 → 0 → destroyed → releases next
+    Node B: use_count 1 → 0 → destroyed ✓
+    Both destructors run. No leak.
+```
+
+```cpp
+struct Node {
+    std::string name;
+    std::shared_ptr<Node> next;   // owns the next node (strong)
+    std::weak_ptr<Node>   prev;   // observes the previous node (weak — no ownership)
+    ~Node() { std::cout << name << " destroyed\n"; }
+};
+
+{
+    auto a = std::make_shared<Node>("A");
+    auto b = std::make_shared<Node>("B");
+
+    a->next = b;   // A owns B  → B use_count = 2
+    b->prev = a;   // weak — A use_count stays 1
+}
+// scope ends:
+// A use_count 1 → 0 → "A destroyed" → a->next released
+// B use_count 2 → 1 → 0 → "B destroyed" ✓
+
+// To navigate backwards via weak_ptr:
+if (auto parent = b->prev.lock()) {   // returns shared_ptr or empty
+    std::cout << parent->name;
+}
+```
+
+#### Real-World Patterns That Cause Cycles
+
+| Pattern | Cycle | Fix |
+|---|---|---|
+| Doubly-linked list | `next` + `prev` both strong | `prev` → `weak_ptr` |
+| Parent ↔ child tree | parent owns children, children hold parent | child's `parent` → `weak_ptr` |
+| Observer ↔ subject | subject owns observers, observers hold subject | observer's subject ref → `weak_ptr` |
+| Callback with capture | object stores callback that captures `shared_ptr` to itself | capture `weak_ptr`, lock inside callback |
+| `enable_shared_from_this` misuse | calling `shared_from_this()` and storing result in member | store as `weak_ptr` |
+
+#### Indirect / Long Cycles
+
+Cycles do not have to be direct (A→B→A). They can span many objects:
+
+```
+A → B → C → D → A   (4-node cycle — all leak)
+```
+
+Any closed loop in the ownership graph causes the same problem. The rule: **the ownership graph must be a DAG** (Directed Acyclic Graph) — no cycles.
+
+#### Detecting Leaks from Cycles
+
+```bash
+# Valgrind reports "definitely lost" or "still reachable"
+valgrind --leak-check=full --track-origins=yes ./app
+
+# AddressSanitizer (ASan) — compile with:
+g++ -fsanitize=address -g ./app.cpp -o app && ./app
+
+# LeakSanitizer (LSan) — compile with:
+g++ -fsanitize=leak -g ./app.cpp -o app && ./app
+# LSan output: "Direct leak of N byte(s) in M object(s)"
+```
+
+Note: LSan detects that memory was not freed but cannot tell you *why* (cycle vs plain forget). Add `~Node()` print or logging to confirm destructor is never called.
+
+#### Summary
+
+```
+Cycle rule:
+  shared_ptr  = "I own this, I keep it alive"  → use_count++
+  weak_ptr    = "I know about this, not responsible for it" → use_count unchanged
+
+  If A owns B and B owns A (directly or transitively) → cycle → leak
+
+Break the cycle:
+  Identify the "back edge" — the reverse/non-primary reference
+  Change it from shared_ptr → weak_ptr
+  Ownership must flow in one direction (parent → child, subject → observer)
 ```
 
 ---

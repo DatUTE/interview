@@ -23,6 +23,7 @@ Complete reference set for senior-level C++ engineering interviews.
 | 13 | [system_design.md](system_design.md) | Interview framework, CAP theorem, scaling patterns, URL shortener, chat, feed, rate limiter, Snowflake ID |
 | 14 | [cpp_keywords.md](cpp_keywords.md) | `const`/`constexpr`/`consteval`/`constinit`, `noexcept`, `inline`, `extern`, `static`, `auto`, `decltype`, `override`, `final`, `explicit`, `mutable`, `volatile`, `thread_local`, attributes |
 | 15 | [low_latency.md](low_latency.md) | CPU pinning, NUMA, huge pages, lock-free SPSC, kernel bypass (DPDK), RDTSC timing, jitter elimination, startup sequence |
+| 16 | [embedded_systems.md](../embedded_systems.md) *(index → 12 files)* | GPIO, interrupts, NVIC, DMA, cache coherency, UART/SPI/I2C/CAN/USB, linker scripts, volatile, RTOS (FreeRTOS), priority inversion, power management, bootloader, OTA, JTAG/SWD, hard fault debug, embedded Linux, ISO 26262, secure boot, TrustZone |
 
 ---
 
@@ -40,6 +41,8 @@ Complete reference set for senior-level C++ engineering interviews.
 | Networking | 2, 8, 13 |
 | Performance & profiling | 1, 3, 8, 10, 11 |
 | System design & architecture | 13 |
+| Embedded systems (hardware → RTOS → Linux) | 16 |
+| Real-time & safety-critical systems | 16 |
 
 ---
 
@@ -136,6 +139,9 @@ CRTP          → static polymorphism, zero vtable overhead
 11. `design_patterns.md` — software design
 12. `networking.md` — network programming
 13. Mock Q&A drill across all files
+
+**Embedded Track (parallel or after Week 4)**
+14. `embedded_systems.md` — hardware through RTOS through Linux, safety & security
 
 ---
 
