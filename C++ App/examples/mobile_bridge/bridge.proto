@@ -1,0 +1,87 @@
+// Shared IDL: C++ core + Android (Java/Kotlin) + iOS (Swift via ObjC++ or SwiftProtobuf)
+syntax = "proto3";
+
+package myapp.bridge;
+
+option java_package = "com.myapp.bridge";
+option java_multiple_files = true;
+
+option objc_class_prefix = "MAP";
+
+// --- Commands: App → Core ---
+
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_INIT        = 1;
+  COMMAND_TYPE_START       = 2;
+  COMMAND_TYPE_STOP        = 3;
+  COMMAND_TYPE_SYNC_CONFIG = 4;
+}
+
+message InitRequest {
+  string app_version = 1;
+  string device_id   = 2;
+  string platform    = 3;  // "android" | "ios"
+}
+
+message SyncConfigRequest {
+  map<string, string> settings = 1;
+}
+
+message AppCommand {
+  uint64 request_id = 1;
+  CommandType type  = 2;
+  oneof payload {
+    InitRequest init           = 10;
+    SyncConfigRequest sync_cfg = 11;
+  }
+}
+
+// --- Events: Core → App ---
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_READY       = 1;
+  EVENT_TYPE_ERROR       = 2;
+  EVENT_TYPE_PROGRESS    = 3;
+  EVENT_TYPE_DATA_CHUNK  = 4;
+}
+
+message ReadyEvent {
+  string core_version = 1;
+  int32  capability_flags = 2;
+}
+
+message ErrorEvent {
+  int32  code    = 1;
+  string message = 2;
+}
+
+message ProgressEvent {
+  int32 percent = 1;
+  string stage  = 2;
+}
+
+message DataChunkEvent {
+  bytes payload = 1;   // opaque or nested message bytes
+  bool  is_last   = 2;
+}
+
+message CoreEvent {
+  uint64 request_id = 1;  // correlate to AppCommand.request_id if applicable
+  EventType type      = 2;
+  oneof payload {
+    ReadyEvent    ready    = 10;
+    ErrorEvent    error    = 11;
+    ProgressEvent progress = 12;
+    DataChunkEvent chunk   = 13;
+  }
+}
+
+// Framed envelope (optional explicit wrapper for length-prefix transports)
+message Envelope {
+  oneof message {
+    AppCommand command = 1;
+    CoreEvent  event   = 2;
+  }
+}

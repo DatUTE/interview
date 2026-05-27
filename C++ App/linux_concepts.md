@@ -1,5 +1,7 @@
 # Linux Concepts for C++ Engineers
 
+**Mục lục nhanh:** §1 Architecture · §2 **Command line & shell** · §3 **Files & permissions** · §4 Processes · §5 Threads · §6 Inodes/fd · §7 I/O · §8 Scheduler · §9 Memory · §10 Signals · §11 Pipes · §12 Commands ref · §13 perf/strace · §14 systemd · §15 Shell scripts
+
 ---
 
 ## 1. Linux Architecture Overview
@@ -54,7 +56,364 @@ int fd = open("file.txt", O_RDONLY);
 
 ---
 
-## 2. Processes
+## 2. Command Line & Shell
+
+Phần này dành cho **làm việc hàng ngày trên server/Linux dev** và phỏng vấn “biết terminal”.
+
+### Shell là gì?
+
+```
+User gõ lệnh → Shell (bash, zsh) → fork + exec program
+                              → hoặc builtin (cd, export, alias)
+```
+
+| Shell | Ghi chú |
+|-------|---------|
+| **bash** | Default trên nhiều distro, script POSIX+ |
+| **sh** | `/bin/sh` — thường dash hoặc bash ở chế độ POSIX |
+| **zsh** | macOS default, completion tốt |
+
+```bash
+echo $SHELL          # /bin/bash
+bash --version
+man bash             # manual đầy đủ
+man ls               # man cho từng lệnh
+```
+
+### Khởi động shell & file cấu hình
+
+```bash
+# Login shell đọc (thứ tự tùy distro):
+/etc/profile → ~/.bash_profile hoặc ~/.profile
+# Interactive non-login:
+~/.bashrc
+
+# Thường đặt trong ~/.bashrc:
+export PATH="$HOME/bin:$PATH"
+export EDITOR=vim
+alias ll='ls -la'
+```
+
+### Biến môi trường quan trọng
+
+| Biến | Ý nghĩa |
+|------|---------|
+| `PATH` | Danh sách thư mục tìm executable (`:` separated) |
+| `HOME` | Thư mục home (`~`) |
+| `PWD` | Thư mục hiện tại |
+| `USER` / `LOGNAME` | Username |
+| `SHELL` | Shell đang dùng |
+| `LANG` | Locale (UTF-8: `en_US.UTF-8`) |
+
+```bash
+echo $PATH
+export MY_VAR=hello      # cho session hiện tại + child processes
+env | grep MY_VAR
+printenv PATH
+```
+
+### Điều hướng & xem file
+
+```bash
+pwd                      # print working directory
+cd /var/log              # absolute path
+cd ../..                 # relative — lên 2 cấp
+cd ~                     # về HOME
+cd -                     # thư mục trước đó
+
+ls                       # list
+ls -l                    # long: perm, owner, size, time
+ls -la                   # + hidden (dotfiles)
+ls -lh                   # human-readable size
+ls -lt                   # sort by time
+```
+
+**Shortcuts:**
+
+| Phím / cú pháp | Tác dụng |
+|----------------|----------|
+| `Tab` | Auto-complete path/command |
+| `↑` / `↓` | Lịch sử lệnh |
+| `Ctrl+R` | Tìm ngược trong history |
+| `Ctrl+C` | SIGINT — dừng lệnh foreground |
+| `Ctrl+Z` | SIGTSTP — suspend (dùng `fg`/`bg`) |
+| `Ctrl+D` | EOF — thoát shell nếu dòng trống |
+| `!!` | Lặp lệnh trước |
+| `!grep` | Lệnh gần nhất bắt đầu bằng `grep` |
+
+### Đọc nội dung file
+
+```bash
+cat file.txt             # in toàn bộ (file nhỏ)
+less file.log            # pager — / tìm, q thoát
+head -n 50 file.log
+tail -n 100 file.log
+tail -f /var/log/syslog  # follow (real-time log)
+wc -l file.txt           # đếm dòng
+file ./a.out             # loại file (ELF, script, ...)
+```
+
+### Tạo & chỉnh sửa (overview)
+
+```bash
+touch new.txt            # tạo file rỗng hoặc cập nhật mtime
+mkdir -p proj/src        # tạo cây thư mục
+nano file.txt            # editor đơn giản
+vim file.txt             # modal editor — `:wq` save quit
+```
+
+### Chạy lệnh & quyền
+
+```bash
+./myapp                  # cần quyền execute trên file
+chmod +x myapp
+
+command1 && command2     # chạy command2 nếu command1 OK (exit 0)
+command1 || command2     # chạy command2 nếu command1 fail
+command1 ; command2      # luôn chạy cả hai
+
+sudo apt update          # chạy với quyền root (nhập password user)
+sudo -u www-data cmd     # chạy với user khác
+whoami
+id                       # uid, gid, groups
+```
+
+### Redirection & pipe (tóm tắt)
+
+Chi tiết syscall `dup2` / pipe: §11 Pipes.
+
+```bash
+cmd > out.txt            # stdout → file (truncate)
+cmd >> out.txt           # append
+cmd 2> err.txt           # stderr
+cmd > all.txt 2>&1       # stdout + stderr cùng file
+cmd < in.txt             # stdin từ file
+
+cmd1 | cmd2              # stdout cmd1 → stdin cmd2
+cmd1 | tee log.txt | cmd2  # vừa pipe vừa ghi file
+```
+
+### Tìm lệnh & gói
+
+```bash
+which gcc                # path của executable trong PATH
+type cd                  # builtin hay external
+command -v python3
+
+# Debian/Ubuntu
+apt search package
+apt install package
+
+# RHEL/Fedora
+dnf install package
+```
+
+### Một phiên làm việc điển hình (C++ dev)
+
+```bash
+cd ~/project/build
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+cmake --build . -j$(nproc)
+./tests/unit_tests
+gdb ./app
+```
+
+---
+
+## 3. File Management & Permissions
+
+### Cây thư mục Linux (FHS — tóm tắt)
+
+```
+/                    # root of filesystem
+├── bin, sbin        # essential commands
+├── etc              # config (passwd, nginx, ...)
+├── home/            # user homes (/home/alice)
+├── root             # root's home
+├── tmp              # temp — sticky bit, world-writable
+├── var              # logs, cache, spool (/var/log)
+├── usr              # programs, libraries (/usr/bin, /usr/lib)
+├── opt              # optional third-party software
+├── dev              # device files
+├── proc, sys        # virtual (kernel interface)
+└── run              # runtime state (PID files, sockets)
+```
+
+```bash
+# Đường dẫn
+/path/to/file          # absolute — từ /
+./file                 # relative — thư mục hiện tại
+../dir                 # parent directory
+~/docs                 # trong HOME
+```
+
+### Thao tác file & thư mục
+
+| Lệnh | Mục đích |
+|------|----------|
+| `mkdir -p a/b/c` | Tạo thư mục (kể cả cha) |
+| `touch f` | Tạo file / cập nhật timestamp |
+| `cp src dst` | Copy file |
+| `cp -r src/ dst/` | Copy cây thư mục |
+| `cp -a src/ dst/` | Archive mode — giữ perm, time, symlinks |
+| `mv old new` | Đổi tên hoặc di chuyển |
+| `rm file` | Xóa file |
+| `rm -r dir/` | Xóa cây (cẩn thận!) |
+| `rm -rf dir/` | Force — **không hỏi** — nguy hiểm |
+| `rmdir empty/` | Chỉ xóa thư mục rỗng |
+
+```bash
+# Ví dụ an toàn hơn
+rm -i important.txt    # interactive confirm
+trash-cli rm file      # nếu cài gói — move to trash
+
+# Xem dung lượng
+du -sh .
+du -sh * | sort -h
+df -h                  # filesystem còn trống bao nhiêu
+```
+
+### Quyền file (permissions)
+
+Mỗi file có **owner**, **group**, và **others** — mỗi nhóm 3 bit: **r**ead, **w**rite, **e**xecute.
+
+```
+-rwxr-xr--  1 alice dev  4096 Jun  1 12:00 app
+│└─┬──┘└─┬─┘└─┬─┘
+│  owner group others
+│
+└─ type: - file, d dir, l symlink, c/b device
+
+r=4, w=2, x=1  →  rwx = 7,  r-x = 5,  r-- = 4
+```
+
+| Octal | Binary | Ý nghĩa |
+|-------|--------|---------|
+| 7 | rwx | read + write + execute |
+| 6 | rw- | read + write |
+| 5 | r-x | read + execute |
+| 4 | r-- | read only |
+| 0 | --- | none |
+
+```bash
+chmod 755 app            # rwxr-xr-x — binary thường dùng
+chmod 644 config.json    # rw-r--r-- — file config
+chmod u+x script.sh      # thêm execute cho owner
+chmod go-w secret        # bỏ write group & others
+chmod -R 750 dir/        # recursive
+
+chown user:group file
+chown -R deploy:deploy /opt/myapp/
+chgrp dev team.txt
+```
+
+**Quyền trên thư mục** (khác file thường):
+
+| Bit | Trên directory |
+|-----|----------------|
+| **r** | Liệt kê tên file (`ls`) |
+| **w** | Tạo/xóa/đổi tên entry trong dir (cần **x** nữa) |
+| **x** | `cd` vào dir, traverse path qua dir |
+
+```bash
+# Thư mục shared team: mọi người vào, chỉ owner sửa file bên trong
+chmod 775 /shared
+# Hoặc setgid (§ dưới) để file mới cùng group
+```
+
+### `umask` — quyền mặc định khi tạo file mới
+
+```bash
+umask                    # ví dụ 0022
+# File mới: 666 & ~umask  → 644 (rw-r--r--)
+# Dir mới:  777 & ~umask  → 755 (rwxr-xr-x)
+
+umask 0027               # file 640, dir 750 — restrictive hơn
+```
+
+Trong C++ khi `open(..., O_CREAT, mode)`:
+
+```cpp
+// mode bị mask bởi umask process
+int fd = open("out.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+// thực tế có thể 0644 & ~umask
+```
+
+### Special permission bits
+
+| Bit | Ví dụ | Ý nghĩa |
+|-----|-------|---------|
+| **setuid** (`u+s`) | `/usr/bin/passwd` | Process chạy với **UID của file owner** |
+| **setgid** (`g+s`) | shared dir | File mới trong dir **inherit group** của dir |
+| **sticky** (`+t`) | `/tmp` | Chỉ owner (hoặc root) xóa file trong dir |
+
+```bash
+ls -l /usr/bin/passwd    # -rwsr-xr-x  s = setuid
+ls -ld /tmp              # drwxrwxrwt     t = sticky
+chmod u+s binary
+chmod g+s /shared
+chmod +t /tmp
+```
+
+Hiển thị octal đầy đủ: `chmod 4755` = setuid + 755.
+
+### ACL (Access Control Lists) — khi chmod 3 nhóm không đủ
+
+```bash
+getfacl file.txt
+setfacl -m u:bob:r-- file.txt      # bob được read
+setfacl -m g:contractors:rw- dir/
+setfacl -b file.txt                 # xóa ACL, chỉ còn mode cơ bản
+```
+
+Cần filesystem hỗ trợ ACL (`ext4` với `acl` mount option).
+
+### Ai được phép làm gì — tóm tắt
+
+```
+Process có effective UID/GID
+  → so với owner của file → dùng cột owner
+  → else nếu GID process ∈ group file → dùng cột group
+  → else → others
+
+Root (UID 0) thường bypass hầu hết checks (trừ một số capability).
+```
+
+```bash
+id
+groups
+ls -ln file              # numeric uid/gid
+```
+
+### Liên kết với C++ / production
+
+```cpp
+#include <sys/stat.h>
+chmod("config.yml", S_IRUSR | S_IWUSR | S_IRGRP);  // 0640
+
+struct stat st;
+stat("file", &st);
+// st.st_mode & S_IRUSR, st.st_uid, st.st_gid
+```
+
+```bash
+# Debug permission denied
+ls -la /path/to/file
+namei -l /path/to/deep/file    # quyền từng component trên path
+sudo -u appuser cat file       # test với user giống production
+```
+
+### Copy giữa máy (devops cơ bản)
+
+```bash
+scp file user@host:/remote/path/
+scp -r dir/ user@host:/remote/
+rsync -avz --progress src/ user@host:dst/   # incremental, SSH
+```
+
+---
+
+## 4. Processes
 
 ### Process Lifecycle
 
@@ -218,7 +577,7 @@ chrt -r 50 ./program           # SCHED_RR (round-robin)
 
 ---
 
-## 3. Threads (pthreads)
+## 5. Threads (pthreads)
 
 ### Thread vs Process
 
@@ -271,7 +630,7 @@ void* val = pthread_getspecific(key); // get value for current thread
 
 ---
 
-## 4. File System
+## 6. File System (Inodes, Links, File Descriptors)
 
 ### Everything is a File
 
@@ -367,29 +726,13 @@ int fd2 = dup(fd);       // fd2 is a new fd pointing to same file description
 int fd2 = dup2(fd, 5);   // make fd 5 point to same file as fd
 ```
 
-### File Permissions
+### File Permissions (kernel view)
 
-```
--rwxr-xr--  1 user group  4096 Jan 1 00:00 file
-│└──────────── owner: rwx (7)
-│   └──────── group: r-x (5)
-│      └───── others: r-- (4)
-└────────────── file type: - regular, d directory, l symlink, c char dev, b block dev
+Chi tiết `chmod`, `umask`, setuid/sticky, ACL, quyền trên directory: **§3 File Management & Permissions**.
 
-# Numeric: r=4, w=2, x=1
-chmod 755 file    # rwxr-xr-x — owner all, group/others read+exec
-chmod 644 file    # rw-r--r-- — owner read+write, others read only
-chmod +x file     # add execute for all
-chmod o-w file    # remove write for others
-
-# Special bits
-chmod u+s file    # setuid — runs as file owner, not caller
-chmod g+s dir     # setgid — new files inherit group
-chmod +t dir      # sticky — only owner can delete files (e.g., /tmp)
-
-# Ownership
-chown user:group file
-chown -R user:group directory/
+```cpp
+// open() mode argument — same bits as chmod (subject to umask)
+open("log.txt", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 ```
 
 ### `/proc` Virtual Filesystem
@@ -419,7 +762,7 @@ cat /proc/net/tcp             # TCP connections
 
 ---
 
-## 5. I/O Models
+## 7. I/O Models
 
 ### Blocking vs Non-Blocking I/O
 
@@ -542,7 +885,7 @@ void handle_read_ET(int fd) {
 
 ---
 
-## 6. Linux Kernel Scheduler
+## 8. Linux Kernel Scheduler
 
 ### Completely Fair Scheduler (CFS)
 
@@ -615,7 +958,7 @@ taskset -cp 0,1 PID          # set affinity of running process
 
 ---
 
-## 7. Memory Management
+## 9. Memory Management
 
 ### Virtual Memory Layout (64-bit Linux)
 
@@ -697,7 +1040,7 @@ echo 1000  > /proc/PID/oom_score_adj   # most likely to be killed
 
 ---
 
-## 8. Signals
+## 10. Signals
 
 ### Signal Overview
 
@@ -755,7 +1098,7 @@ int sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
 
 ---
 
-## 9. Pipes and Redirection
+## 11. Pipes and Redirection
 
 ### Shell Redirection Internals
 
@@ -793,7 +1136,9 @@ if (fork() == 0) {
 
 ---
 
-## 10. Essential Commands
+## 12. Essential Commands (Quick Reference)
+
+> **Shell & file basics:** §2 Command Line · **Permissions:** §3 File Management
 
 ### Process Management
 
@@ -885,7 +1230,7 @@ tail -f log.txt            # follow log in real-time
 
 ---
 
-## 11. Performance Analysis Tools
+## 13. Performance Analysis Tools
 
 ### `strace` — System Call Tracer
 
@@ -962,7 +1307,7 @@ cat /proc/softirqs          # software interrupt counts
 
 ---
 
-## 12. Daemons and Services
+## 14. Daemons and Services
 
 ### Creating a Daemon (Classic)
 
@@ -1040,7 +1385,7 @@ journalctl -u myapp -f    # follow logs
 
 ---
 
-## 13. Shell Scripting Essentials
+## 15. Shell Scripting Essentials
 
 ```bash
 #!/bin/bash
@@ -1098,6 +1443,58 @@ EOF
 ---
 
 ## Mock Interview Questions
+
+### Command line & shell
+
+---
+
+**[Mid]** Giải thích `stdout`, `stderr`, và redirection `2>&1`.
+
+> **stdout (fd 1):** output bình thường. **stderr (fd 2):** lỗi/diagnostic — tách để pipe stdout mà vẫn thấy lỗi trên terminal. `cmd > file 2>&1` gửi stderr vào cùng nơi stdout đang trỏ (đặt `2>&1` **sau** `> file`). `cmd 2>&1 | other` pipe cả hai.
+
+---
+
+**[Mid]** `PATH` là gì? Chạy `./app` khác `app` thế nào?
+
+> `PATH` là danh sách thư mục shell tìm executable khi gõ tên không có `/`. `app` tìm trong PATH; `./app` chạy file trong thư mục hiện tại (cần quyền execute). Tránh đặt `.` đầu PATH (bảo mật).
+
+---
+
+### File permissions
+
+---
+
+**[Mid]** Giải thích `chmod 755` và `chmod 644`.
+
+> **755** `rwxr-xr-x`: owner đọc/ghi/chạy; group và others đọc+chạy — binary/script. **644** `rw-r--r--`: owner đọc+ghi; others chỉ đọc — config/data. Octal: 7=rwx, 5=r-x, 4=r--.
+
+---
+
+**[Mid]** Quyền `x` trên **thư mục** khác file thường?
+
+> Trên **directory**, `x` = traverse (`cd`, đi qua path). `r` = `ls` tên. `w` = tạo/xóa/đổi tên entry (cần `x`). Thiếu `x` trên `/home/user` → không `cd` được dù có `r`.
+
+---
+
+**[Mid]** `umask` 0022 nghĩa là gì?
+
+> Bit bị **tắt** khi tạo file mới. `0022` tắt write group/others → file ~644, dir ~755. Ảnh hưởng `open(O_CREAT, mode)` trong C++.
+
+---
+
+**[Senior]** setuid, setgid, sticky trên `/tmp`?
+
+> **setuid:** process chạy UID owner file (vd `passwd`). **setgid** dir: file mới inherit group. **sticky** `/tmp`: chỉ owner xóa file của mình — tránh user xóa lẫn nhau.
+
+---
+
+**[Senior]** `Permission denied` khi C++ `open()` — debug?
+
+> `ls -la` file + `namei -l` path; user process (`ps`); so UID/GID với owner/group; kiểm tra SELinux. Test `sudo -u serviceuser cat file`.
+
+---
+
+### Processes & kernel
 
 ---
 

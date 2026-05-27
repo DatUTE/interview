@@ -581,6 +581,7 @@ while (!(*UART_STATUS & TX_READY)) {}  // must re-read each loop iteration
 // - NOT a memory barrier for other CPUs (use std::atomic or std::memory_order)
 // - NOT a substitute for mutex
 // Modern C++: prefer std::atomic for multi-threaded flags
+// Memory orders (relaxed / acquire / release / seq_cst): see multithreading_and_concurrency.md § Memory Orders
 ```
 
 **`volatile` vs `std::atomic`:**

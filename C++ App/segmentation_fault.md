@@ -1,5 +1,7 @@
 # Segmentation Fault in C++
 
+> **Related:** [production_debugging.md](production_debugging.md) — on-call playbook (deadlock, race, hang, sanitizer matrix)
+
 ---
 
 ## What Is a Segmentation Fault?
