@@ -14,7 +14,7 @@ Tài liệu ôn phỏng vấn kỹ thuật — tập trung **Senior C++ / system
 
 ## Sections
 
-### [C++ App/](C++%20App/README.md) — Core track (18 files)
+### [C++ App/](C++%20App/README.md) — Core track (19 files)
 
 Hệ thống C++, concurrency, networking, low latency, Linux, system design.
 
@@ -81,6 +81,7 @@ Chi tiết checklist: [vsf_senior_cpp_vinsmart_future.md](vsf_senior_cpp_vinsmar
 | [realtime_media_voip_webrtc.md](C++%20App/realtime_media_voip_webrtc.md) | RTP, jitter buffer, WebRTC, SFU, C++ stacks (libwebrtc, GStreamer) |
 | [database_management.md](C++%20App/database_management.md) | SQL vs NoSQL, khi nào dùng, Redis+PG, C++ core không block hot path |
 | [cpp_core_mobile_bridge_idl.md](C++%20App/cpp_core_mobile_bridge_idl.md) | Protobuf IDL, JNI, Swift, DB sync, Q&A |
+| [gtest_unit_testing.md](C++%20App/gtest_unit_testing.md) | GoogleTest/gMock, `ASSERT` vs `EXPECT`, mocks/stubs/fakes, CMake/CTest, flaky tests |
 | [leetcode_interview_prep.md](leetcode_interview_prep.md) | ~10 bài Easy→Medium / concept (LeetCode PV) |
 | [examples/mobile_bridge/](C++%20App/examples/mobile_bridge/) | `bridge.proto` + C++ sketch |
 

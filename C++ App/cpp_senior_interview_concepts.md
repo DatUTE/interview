@@ -120,10 +120,22 @@
 - **Data race** — TSan, happens-before, `shared_ptr` ≠ thread-safe object
 - **Hang** — `top -H`, `strace`, perf
 - **On-call** — mitigate → diagnose → fix → postmortem
+- **Regression tests** — GoogleTest/gMock, `ASSERT` vs `EXPECT`, stubs/mocks, CTest, sanitizer CI → [gtest_unit_testing.md](gtest_unit_testing.md)
 
 ---
 
-## 12. Senior Behaviors (architecture, ownership, review, mentoring)
+## 12. Unit Testing with GoogleTest
+
+- **gTest basics:** `TEST`, `TEST_F`, `EXPECT_*` vs `ASSERT_*`
+- **Test doubles:** dummy, stub, fake, spy, mock
+- **gMock:** `EXPECT_CALL`, `ON_CALL`, strict vs nice mocks
+- **CTest/CMake:** `gtest_discover_tests`, `ctest --output-on-failure`
+- **Flaky/race tests:** `--gtest_repeat`, `--gtest_filter`, TSan
+- → [gtest_unit_testing.md](gtest_unit_testing.md)
+
+---
+
+## 13. Senior Behaviors (architecture, ownership, review, mentoring)
 
 → **Full guide:** [senior_engineering_behaviors.md](senior_engineering_behaviors.md)
 
@@ -147,7 +159,7 @@
 | ------------------ | --------------------------------------------------------------------------------------- |
 | Must nail          | Move semantics, smart pointers, multithreading basics, Rule of 5, vtable                |
 | Strong on          | Templates/SFINAE, memory model, STL complexity, design patterns                         |
-| VSF / real-time JD | networking + WebSocket, low_latency, production_debugging, senior_engineering_behaviors |
+| VSF / real-time JD | networking + WebSocket, low_latency, production_debugging, gtest_unit_testing, senior_engineering_behaviors |
 | Good to know       | C++20 features, lock-free, WebRTC/VoIP, custom allocators, ABI                          |
 
 

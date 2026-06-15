@@ -27,12 +27,13 @@ Complete reference set for senior-level C++ engineering interviews.
 | 14 | [cpp_keywords.md](cpp_keywords.md) | `const`/`constexpr`/`consteval`/`constinit`, `noexcept`, `inline`, `extern`, `static`, `auto`, `decltype`, `override`, `final`, `explicit`, `mutable`, `volatile`, `thread_local`, attributes |
 | 15 | [low_latency.md](low_latency.md) | CPU pinning, NUMA, **cache & vector/array scan**, lock-free SPSC, DPDK, jitter elimination |
 | 16 | [production_debugging.md](production_debugging.md) | On-call triage, sanitizer matrix (ASan/TSan/UBSan), deadlock/race/hang diagnosis, observability |
-| 17 | [realtime_media_voip_webrtc.md](realtime_media_voip_webrtc.md) | RTP/RTCP, jitter buffer, Opus, WebRTC (ICE/STUN/TURN/SRTP), SFU vs MCU, C++ media stacks |
-| 18 | [senior_engineering_behaviors.md](senior_engineering_behaviors.md) | Architecture thinking, ownership, proactive mindset, code review checklist, mentoring (STAR) |
-| 19 | [cpp_senior_interview_concepts.md](cpp_senior_interview_concepts.md) | Topic map + prioritization |
-| 20 | [embedded_systems.md](../Embedded/embedded_systems.md) *(index → 12 files)* | GPIO, interrupts, NVIC, DMA, cache coherency, UART/SPI/I2C/CAN/USB, linker scripts, volatile, RTOS (FreeRTOS), priority inversion, power management, bootloader, OTA, JTAG/SWD, hard fault debug, embedded Linux, ISO 26262, secure boot, TrustZone |
-| 21 | [Rust/rust_00_index.md](../Rust/rust_00_index.md) *(index → 12 files)* | Ownership/borrowing/lifetimes, traits/generics, enums/pattern matching, iterators/closures, error handling, smart pointers (Box/Rc/Arc/RefCell), concurrency (Mutex/channels/Rayon), async/await (tokio/futures), modules/Cargo/workspaces, unsafe/FFI, advanced patterns (builder/type-state/macros), interview hot topics |
-| 22 | [OpenGL/opengl_00_index.md](../OpenGL/opengl_00_index.md) *(index → 10 files)* | Rendering pipeline, GLFW/GLAD context, VAO/VBO/EBO, GLSL shaders, textures, MVP transforms/camera, Phong/Blinn-Phong/PBR lighting, FBO/post-processing/deferred rendering, shadow mapping/normal maps/HDR/bloom/SSAO, compute shaders/DSA/instancing/indirect draw, GPU profiling/batching/LOD, interview hot topics |
+| 17 | [gtest_unit_testing.md](gtest_unit_testing.md) | GoogleTest/gMock, `ASSERT` vs `EXPECT`, mocks/stubs/fakes, CMake/CTest, sanitizer CI |
+| 18 | [realtime_media_voip_webrtc.md](realtime_media_voip_webrtc.md) | RTP/RTCP, jitter buffer, Opus, WebRTC (ICE/STUN/TURN/SRTP), SFU vs MCU, C++ media stacks |
+| 19 | [senior_engineering_behaviors.md](senior_engineering_behaviors.md) | Architecture thinking, ownership, proactive mindset, code review checklist, mentoring (STAR) |
+| 20 | [cpp_senior_interview_concepts.md](cpp_senior_interview_concepts.md) | Topic map + prioritization |
+| 21 | [embedded_systems.md](../Embedded/embedded_systems.md) *(index → 12 files)* | GPIO, interrupts, NVIC, DMA, cache coherency, UART/SPI/I2C/CAN/USB, linker scripts, volatile, RTOS (FreeRTOS), priority inversion, power management, bootloader, OTA, JTAG/SWD, hard fault debug, embedded Linux, ISO 26262, secure boot, TrustZone |
+| 22 | [Rust/rust_00_index.md](../Rust/rust_00_index.md) *(index → 12 files)* | Ownership/borrowing/lifetimes, traits/generics, enums/pattern matching, iterators/closures, error handling, smart pointers (Box/Rc/Arc/RefCell), concurrency (Mutex/channels/Rayon), async/await (tokio/futures), modules/Cargo/workspaces, unsafe/FFI, advanced patterns (builder/type-state/macros), interview hot topics |
+| 23 | [OpenGL/opengl_00_index.md](../OpenGL/opengl_00_index.md) *(index → 10 files)* | Rendering pipeline, GLFW/GLAD context, VAO/VBO/EBO, GLSL shaders, textures, MVP transforms/camera, Phong/Blinn-Phong/PBR lighting, FBO/post-processing/deferred rendering, shadow mapping/normal maps/HDR/bloom/SSAO, compute shaders/DSA/instancing/indirect draw, GPU profiling/batching/LOD, interview hot topics |
 
 **Company prep:** [../vsf_senior_cpp_vinsmart_future.md](../vsf_senior_cpp_vinsmart_future.md) (VinSmart Future Senior C++) · [../README.md](../README.md) (repo index)
 
@@ -52,18 +53,19 @@ Complete reference set for senior-level C++ engineering interviews.
 | Networking & WebSocket | 2, 8, 12, 13 |
 | Performance & profiling | 1, 3, 8, 10, 11, 15 |
 | Production debugging | 4, 16 |
-| Real-time media (VoIP/WebRTC) | 17 |
+| Unit testing / gTest | 17 |
+| Real-time media (VoIP/WebRTC) | 18 |
 | Databases (SQL, NoSQL, C++ integration) | 13b, 13 |
-| System design & architecture | 13, 13b, 18, 19 |
-| Senior behaviors (review, mentor, ownership) | 18 |
-| Embedded systems (hardware → RTOS → Linux) | 20 |
-| Real-time & safety-critical systems | 20 |
-| Rust ownership & memory safety | 21 |
-| Rust concurrency & async | 21 |
-| Rust systems programming & FFI | 21 |
-| OpenGL rendering pipeline & shaders | 22 |
-| OpenGL lighting, shadows & post-processing | 22 |
-| OpenGL performance & modern techniques | 22 |
+| System design & architecture | 13, 13b, 19, 20 |
+| Senior behaviors (review, mentor, ownership) | 19 |
+| Embedded systems (hardware → RTOS → Linux) | 21 |
+| Real-time & safety-critical systems | 21 |
+| Rust ownership & memory safety | 22 |
+| Rust concurrency & async | 22 |
+| Rust systems programming & FFI | 22 |
+| OpenGL rendering pipeline & shaders | 23 |
+| OpenGL lighting, shadows & post-processing | 23 |
+| OpenGL performance & modern techniques | 23 |
 
 ---
 
@@ -163,7 +165,8 @@ CRTP          → static polymorphism, zero vtable overhead
 14. `design_patterns.md` — software design
 15. `networking.md` — TCP/UDP, WebSocket, epoll server
 16. `production_debugging.md` — crash, deadlock, race playbook
-17. Mock Q&A drill across all files
+17. `gtest_unit_testing.md` — GoogleTest/gMock, stubs vs mocks, CTest, sanitizer test strategy
+18. Mock Q&A drill across all files
 
 **Real-Time / VSF track (Week 5+)**
 15. `low_latency.md` — jitter, CPU pinning, lock-free hot path

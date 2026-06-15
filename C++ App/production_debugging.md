@@ -226,6 +226,7 @@ dropped_messages.inc();
 | Deadlock, lock-free, backpressure | [multithreading_and_concurrency.md](multithreading_and_concurrency.md)       |
 | epoll server, TCP tuning          | [networking.md](networking.md)                                               |
 | Latency, jitter                   | [low_latency.md](low_latency.md)                                             |
+| GoogleTest/gMock, flaky tests     | [gtest_unit_testing.md](gtest_unit_testing.md)                               |
 | VSF checklist                     | [../vsf_senior_cpp_vinsmart_future.md](../vsf_senior_cpp_vinsmart_future.md) |
 
 
