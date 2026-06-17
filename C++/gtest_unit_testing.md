@@ -139,6 +139,45 @@ TEST_F(LruCacheTest, EvictsLeastRecentlyUsedItem) {
 }
 ```
 
+### When are `SetUp()` and `TearDown()` called?
+
+For every `TEST_F(FixtureName, TestName)`:
+
+1. gTest creates a **new** fixture object.
+2. `SetUp()` runs **before** the test body.
+3. The test body runs.
+4. `TearDown()` runs **after** the test body, even if the test failed or used `ASSERT_*`.
+5. The fixture object is destroyed.
+
+```
+per TEST_F:
+  construct fixture -> SetUp() -> test body -> TearDown() -> destroy fixture
+```
+
+| API | Calls `SetUp()` / `TearDown()`? |
+|-----|----------------------------------|
+| `TEST(...)` | No fixture; neither is called |
+| `TEST_F(...)` | Yes; once per test |
+| `TEST_P(...)` | Yes; once per parameter value |
+
+Important details:
+
+- **Fresh state per test:** two `TEST_F(LruCacheTest, ...)` cases each get their own fixture instance and their own `SetUp()` call. State from test A does not leak into test B.
+- **`TearDown()` always runs** after the test body when using a fixture, including on failure. Do not rely on manual cleanup only at the end of the test function.
+- **Constructor vs `SetUp()`:** member initialization and constructor logic run first; put per-test preparation in `SetUp()`. Prefer RAII members (`std::unique_ptr`, temp dirs with destructors) over large `TearDown()` blocks.
+- **No guaranteed order across tests:** `SetUp()`/`TearDown()` order between different tests is not part of the API contract unless you enforce it with fixtures that depend on each other (avoid that).
+
+```cpp
+class DemoTest : public ::testing::Test {
+protected:
+    void SetUp() override { /* runs before each TEST_F */ }
+    void TearDown() override { /* runs after each TEST_F, pass or fail */ }
+};
+
+TEST_F(DemoTest, First) { /* own fixture instance */ }
+TEST_F(DemoTest, Second) { /* another fresh fixture instance */ }
+```
+
 Rules of thumb:
 
 - Keep `SetUp()` small; avoid building a hidden mini-application.
@@ -213,6 +252,61 @@ A **test double** replaces a real dependency in a test. The key distinction is w
 | **Fake** | Working lightweight implementation | Usually no | In-memory repository |
 | **Spy** | Records calls for later inspection | Yes, manually | Vector of published events |
 | **Mock** | Pre-programmed expectations | Yes, via framework | `EXPECT_CALL(repo, save(_))` |
+
+### Dummy
+
+A **dummy** is the simplest test double. It is passed into the system under test only because the function, constructor, or interface requires it. The test does not depend on its behavior, return values, or call count.
+
+Use a dummy when:
+
+- The production API requires a dependency, but the tested path should not use it.
+- You need to satisfy a constructor or function signature.
+- The object is irrelevant to the assertion you are making.
+
+Example:
+
+```cpp
+class ILogger {
+public:
+    virtual ~ILogger() = default;
+    virtual void log(std::string_view message) = 0;
+};
+
+class DummyLogger : public ILogger {
+public:
+    void log(std::string_view) override {}
+};
+
+TEST(PriceCalculatorTest, AppliesTax) {
+    DummyLogger logger;
+    PriceCalculator calculator(logger);
+
+    EXPECT_DOUBLE_EQ(calculator.total_with_tax(100.0, 0.1), 110.0);
+}
+```
+
+In this test, logging is not part of the behavior being tested. The logger only exists because `PriceCalculator` needs one. The dummy implementation does nothing, and the test should not assert anything about it.
+
+How to write a dummy:
+
+- Implement only the required interface methods.
+- Keep the methods empty when the tested code should not use them.
+- If a method must return something, return the safest neutral value, such as `false`, `0`, `nullptr`, or an empty container.
+- Do not add `EXPECT_CALL`, counters, vectors, or state. Once you verify interactions, it is no longer a dummy; it becomes a spy or mock.
+
+If the dummy unexpectedly gets used in a path where it should not be used, consider making that method fail fast:
+
+```cpp
+class DummyPaymentGateway : public IPaymentGateway {
+public:
+    bool charge(int cents) override {
+        ADD_FAILURE() << "Payment gateway should not be used in this test";
+        return false;
+    }
+};
+```
+
+Use this style when calling the dependency would indicate the test took the wrong branch.
 
 ### Stub
 
@@ -295,6 +389,49 @@ TEST(GatewayTest, PublishesTemperatureEvent) {
 ```
 
 Use a spy when you want clear test code without tightly coupling to exact call order.
+
+### Mock
+
+A **mock** verifies interaction with a dependency. Use it when the important behavior is not only the final return value or state, but also **which collaborator was called, with what arguments, how many times, or in what order**.
+
+Common mock use cases:
+
+- A service must call `repo.save(user)` after validation succeeds.
+- A gateway must publish an event exactly once.
+- A retry component must call an API three times after failures.
+- A command must not send email when input is invalid.
+
+Conceptually:
+
+```cpp
+TEST(UserServiceTest, SavesUserAfterValidation) {
+    MockUserRepository repo;
+    UserService service(repo);
+
+    EXPECT_CALL(repo, save(UserHasEmail("a@example.com")))
+        .Times(1);
+
+    service.register_user("a@example.com");
+}
+```
+
+This test cares about the collaboration between `UserService` and `UserRepository`. The expectation says: when `register_user()` runs, `save()` must be called once with the right user.
+
+Use a mock when:
+
+- The dependency has a side effect: database write, event publish, email send, HTTP request.
+- The result is difficult or impossible to observe directly.
+- Calling or not calling the dependency is part of the required behavior.
+- You need to verify retries, call count, argument values, or call order.
+
+Avoid mocks when:
+
+- A simple return value is enough; use a stub.
+- You need realistic stateful behavior; use a fake.
+- You only want to inspect what happened after the call; a spy may be simpler.
+- The test becomes too coupled to implementation details.
+
+In short: a **stub gives answers**, a **fake behaves like a small real implementation**, a **spy records what happened**, and a **mock sets expectations before the action and verifies them during the test**.
 
 ---
 
