@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package interview.grpc_hello;
+
+// A compact service for learning the moving parts of gRPC C++:
+// .proto contract -> generated stubs -> server implementation -> client calls.
+service Greeter {
+  // Unary RPC: one request, one response.
+  rpc SayHello(HelloRequest) returns (HelloReply);
+
+  // Server-streaming RPC: one request, many responses.
+  rpc WatchGreetings(HelloRequest) returns (stream HelloReply);
+}
+
+message HelloRequest {
+  string name = 1;
+  uint64 request_id = 2;
+}
+
+message HelloReply {
+  string message = 1;
+  uint64 request_id = 2;
+}

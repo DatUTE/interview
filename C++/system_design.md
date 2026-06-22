@@ -218,6 +218,8 @@ Cache thundering herd: many miss simultaneously → mutex/semaphore or probabili
 
 ### Database Selection Guide
 
+> **Deep dive:** SQL vs NoSQL definitions, when to use each, C++ integration (pools, hot path) → [database_management.md](database_management.md)
+
 ```
 Relational (PostgreSQL, MySQL):
   ✓ Complex queries, JOINs, transactions

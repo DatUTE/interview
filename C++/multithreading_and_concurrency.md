@@ -1,5 +1,7 @@
 # Multithreading & Concurrency in C++
 
+> **Related:** [production_debugging.md](production_debugging.md) — deadlock/race diagnosis in production
+
 ---
 
 ## 1. `std::thread`, `std::async`, `std::future` / `std::promise`
@@ -19,6 +21,7 @@ t.join();                   // block until t finishes
 ```
 
 **Rules**:
+
 - A `std::thread` object must be either `join()`ed or `detach()`ed before it's destroyed — otherwise `std::terminate` is called.
 - Use RAII wrapper (`jthread` in C++20) to avoid forgetting.
 
@@ -61,11 +64,14 @@ int result = fut.get();  // blocks until done, returns value or rethrows excepti
 ```
 
 **Launch policies**:
-| Policy | Behavior |
-|---|---|
-| `std::launch::async` | Always runs on a new thread |
-| `std::launch::deferred` | Runs lazily on the calling thread when `.get()` is called |
-| `std::launch::async \| std::launch::deferred` | Implementation-defined (default) — **avoid this** |
+
+
+| Policy                                       | Behavior                                                  |
+| -------------------------------------------- | --------------------------------------------------------- |
+| `std::launch::async`                         | Always runs on a new thread                               |
+| `std::launch::deferred`                      | Runs lazily on the calling thread when `.get()` is called |
+| `std::launch::async | std::launch::deferred` | Implementation-defined (default) — **avoid this**         |
+
 
 **Always specify `launch::async` explicitly** — the default policy may run deferred, masking race conditions.
 
@@ -89,7 +95,7 @@ int val = fut.get();  // blocks until set_value called
 producer.join();
 ```
 
-**`std::shared_future`**: multiple threads can wait on the same result:
+`**std::shared_future**`: multiple threads can wait on the same result:
 
 ```cpp
 std::shared_future<int> sf = prom.get_future().share();
@@ -116,11 +122,13 @@ void increment() {
 
 **Never lock manually** — always use RAII wrappers:
 
-| Wrapper | Behavior |
-|---|---|
-| `std::lock_guard` | Lock on construct, unlock on destroy. Not movable. |
-| `std::unique_lock` | Like `lock_guard` but deferred locking, timed locking, movable, unlockable mid-scope |
-| `std::scoped_lock` (C++17) | Lock multiple mutexes atomically — deadlock-safe |
+
+| Wrapper                    | Behavior                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `std::lock_guard`          | Lock on construct, unlock on destroy. Not movable.                                   |
+| `std::unique_lock`         | Like `lock_guard` but deferred locking, timed locking, movable, unlockable mid-scope |
+| `std::scoped_lock` (C++17) | Lock multiple mutexes atomically — deadlock-safe                                     |
+
 
 ```cpp
 // unique_lock — deferred locking
@@ -208,63 +216,236 @@ Common operations: `load`, `store`, `fetch_add`, `fetch_sub`, `exchange`, `compa
 
 ### Memory Orders — The Core Concept
 
-Memory order controls **how operations on the atomic are visible to other threads** and **what reordering the CPU/compiler is allowed to do**.
+#### Vấn đề gốc: compiler và CPU reorder
+
+Trên **một thread**, compiler/CPU có thể **đổi thứ tự** read/write (miễn không đổi kết quả observable của thread đó) để tối ưu.
+
+Trên **nhiều thread**, reorder + cache khiến thread khác **không thấy** thứ tự bạn “viết trong code”:
+
+```cpp
+// Thread 1                    // Thread 2 có thể thấy:
+data = 42;                     ready == true  nhưng data vẫn 0  (reorder!)
+ready = true;
+```
+
+`std::mutex` ngăn reorder qua lock/unlock. `std::atomic` + **memory order** cho phép sync **nhẹ hơn** mutex khi pattern rõ (SPSC queue, flag publish).
+
+#### Happens-before (quan hệ bạn cần nhớ)
+
+**A happens-before B** ⇒ mọi side effect của A **visible** với thread thực hiện B.
+
+Nguồn happens-before trong C++:
+
+- Cùng thread: thứ tự program  
+- `mutex::unlock()` → `mutex::lock()` trên cùng mutex  
+- **release** trên atomic X → **acquire** trên cùng X (cùng giá trị / CAS success)  
+- `thread::join()` sau khi thread kết thúc  
+
+**Data race** = hai thread truy cập cùng vùng nhớ, ít nhất một ghi, **không** có happens-before → **UB**.
+
+#### Bảng `std::memory_order` (C++11)
 
 ```
-Weaker (faster) ←————————————————→ Stronger (slower)
-relaxed   consume   acquire   release   acq_rel   seq_cst
+Yếu (nhanh, ít fence)  ←————————————————————————→  Mạnh (chậm hơn trên ARM/POWER)
+relaxed    consume    acquire    release    acq_rel    seq_cst
 ```
+
+| Order | Dùng cho | Đảm bảo |
+|-------|----------|---------|
+| **relaxed** | Counter thống kê | Chỉ atomicity op đó; **không** order với memory khác |
+| **consume** | Đọc con trỏ rồi dereference data phụ thuộc | Acquire yếu trên **data dependency** (hiếm dùng trực tiếp) |
+| **acquire** | **Load** sau khi thread khác **release** | Mọi **read** sau load thấy write trước release khớp |
+| **release** | **Store** “publish” dữ liệu đã ghi xong | Mọi **write** trước store visible sau acquire khớp |
+| **acq_rel** | RMW (`fetch_add`, `compare_exchange`) | Vừa acquire vừa release trên một op |
+| **seq_cst** | Default; đồng thuận global | Total order trên mọi `seq_cst` — mạnh nhất |
+
+**Quy tắc thực hành:**
+
+```
+relaxed     → chỉ đếm / stat, không publish data khác
+release     → store sau khi ghi xong payload (producer)
+acquire     → load trước khi đọc payload (consumer)
+acq_rel     → CAS / fetch trên biến “điều phối”
+seq_cst     → mặc định; dùng khi chưa chắc / nhiều atomic liên quan logic
+```
+
+**`volatile` ≠ memory order** — chỉ chống compiler cache register; không thread-safe, không happens-before → [cpp_keywords.md](cpp_keywords.md) § volatile.
 
 ---
 
 ### `memory_order_relaxed`
 
-No synchronization — only atomicity guaranteed. No ordering relative to other memory operations.
+Chỉ đảm bảo **một** thao tác atomic không bị torn; **không** tạo happens-before với biến thường khác.
 
 ```cpp
-// Counters, statistics — just need atomicity, not ordering
-std::atomic<int> hit_count{0};
-hit_count.fetch_add(1, std::memory_order_relaxed);
+std::atomic<uint64_t> packets_processed{0};
+
+void on_packet() {
+    packets_processed.fetch_add(1, std::memory_order_relaxed);
+    // OK: chỉ cần đếm đúng, không thread nào đọc biến khác "dựa vào" thứ tự với counter
+}
+```
+
+**Không an toàn:**
+
+```cpp
+std::atomic<bool> ready{false};
+int data = 0;
+data = 42;
+ready.store(true, std::memory_order_relaxed);  // BUG: consumer có thể thấy ready mà data chưa 42
 ```
 
 ---
 
-### `memory_order_release` + `memory_order_acquire` (Most Common Pattern)
+### `memory_order_release` + `memory_order_acquire` (pattern phổ biến nhất)
 
-**Release**: all writes before this store are visible to any thread that does an acquire-load of the same atomic.
-**Acquire**: all reads after this load see all writes that happened-before the matching release-store.
+**Release-store:** mọi **write** trước đó trong thread producer → visible với consumer thực hiện **acquire-load** thấy giá trị đó.
+
+**Acquire-load:** mọi **read** sau load → thấy write đã release.
 
 ```cpp
 std::atomic<bool> ready{false};
 int data = 0;
 
-// Thread 1 — Producer
+// Producer
 void producer() {
-    data = 42;                                        // (A) write data
-    ready.store(true, std::memory_order_release);     // (B) release — A is visible after B
+    data = 42;                                        // (A) plain write — chỉ publish qua (B)
+    ready.store(true, std::memory_order_release);     // (B) release
 }
 
-// Thread 2 — Consumer
+// Consumer
 void consumer() {
-    while (!ready.load(std::memory_order_acquire)) {} // (C) acquire — sees A after seeing B
-    assert(data == 42);                               // (D) guaranteed — A happened-before D
+    while (!ready.load(std::memory_order_acquire)) {} // (C) acquire
+    assert(data == 42);                               // (D) OK — (A) happens-before (D)
 }
 ```
 
-Think of it as: **release publishes**, **acquire subscribes**.
+Timeline (logic):
+
+```
+Producer CPU:     [ write data=42 ] ----release----> ready=true
+Consumer CPU:                      acquire<-------- [ read data==42 ]
+```
+
+**Hình ảnh:** **release = publish**, **acquire = subscribe** (chỉ cần đồng bộ **một cặp** thread, không cần global order).
+
+**Publish pointer (lock-free handoff):**
+
+```cpp
+std::atomic<int*> ptr{nullptr};
+int data = 0;
+
+// Producer
+data = 42;
+ptr.store(&data, std::memory_order_release);
+
+// Consumer
+int* p;
+while (!(p = ptr.load(std::memory_order_acquire))) {}
+assert(*p == 42);
+```
 
 ---
 
-### `memory_order_seq_cst` (Default)
+### `memory_order_consume` (hiếu ít dùng trực tiếp)
 
-Strongest ordering — all atomic operations form a single total order observed consistently by all threads. Slowest on architectures like x86 (requires `MFENCE` on ARM).
+Giống acquire nhưng chỉ order các op **phụ thuộc data** từ giá trị load (dependency chain). Compiler có thể reorder các read **không** phụ thuộc.
+
+- Trên thực tế nhiều compiler implement **consume ≈ acquire**  
+- Chuẩn khó implement tối ưu → **thường dùng `acquire` thay consume**  
+- `atomic_load_explicit(p, memory_order_consume)` khi đọc con trỏ publish
+
+---
+
+### `memory_order_acq_rel`
+
+Cho **read-modify-write** vừa “nhận” state cũ vừa “publish” state mới:
 
 ```cpp
-counter.fetch_add(1);  // seq_cst by default
-counter.fetch_add(1, std::memory_order_seq_cst);  // explicit
+// compare_exchange: nếu success → release previous writes + acquire sees prior publishes
+head_.compare_exchange_weak(
+    expected, new_head,
+    std::memory_order_release,
+    std::memory_order_relaxed);  // failure: chỉ cần relaxed reload expected
 ```
 
-**Use as the default** until you profile and need to optimize.
+`fetch_add` với `memory_order_acq_rel` khi counter điều phối logic phức tạp (ít gặp hơn release/acquire tách).
+
+---
+
+### `memory_order_seq_cst` (default)
+
+```cpp
+counter.fetch_add(1);  // = memory_order_seq_cst
+```
+
+- Mọi `seq_cst` op trên **mọi** atomic tạo **một thứ tự tổng** mọi thread đồng ý  
+- Mạnh hơn release/acquire (chỉ sync **cặp** release→acquire)  
+- Trên **x86** load/store thường đã khá mạnh; **ARM** chênh lệch seq_cst vs relaxed rõ hơn  
+
+**Khi cần seq_cst:** nhiều flag/atomic tạo invariant logic chéo (ví dụ Dekker-style), hoặc **chưa chứng minh** release/acquire đủ — dùng default rồi optimize sau khi profile.
+
+**Ví dụ cần global order (seq_cst):**
+
+```cpp
+std::atomic<bool> flag_a{false}, flag_b{false};
+// Thread 1: flag_a=true; if (!flag_b.load()) { /* ... */ }
+// Thread 2: flag_b=true; if (!flag_a.load()) { /* ... */ }
+// seq_cst: không cả hai nhánh "cả hai false" cùng lúc (với pattern cụ thể)
+```
+
+---
+
+### SPSC ring buffer — tại sao relaxed + acquire + release?
+
+```cpp
+// Producer try_push:
+size_t tail = tail_.load(relaxed);           // chỉ đọc index local
+if (next == head_.load(acquire)) return false; // acquire: thấy consumer đã advance head
+buf_[tail] = item;                           // write payload
+tail_.store(next, release);                  // release: consumer acquire tail thấy item
+
+// Consumer try_pop: đối xứng (acquire tail, release head)
+```
+
+| Op | Order | Lý do |
+|----|-------|-------|
+| load index “của mình” | relaxed | Chỉ thread đó ghi index đó |
+| load index “của bên kia” | acquire | Đồng bộ với release store bên kia |
+| store index sau ghi buffer | release | Publish item đã ghi |
+
+---
+
+### Lỗi thường gặp
+
+| Lỗi | Hậu quả |
+|-----|---------|
+| Plain `bool ready` + không mutex | Data race — UB |
+| `relaxed` cho flag publish data | Consumer thấy flag trước data |
+| Quên acquire sau khi CAS success | Đọc payload stale |
+| Mặc định `seq_cst` mọi nơi | Đúng nhưng chậm hơn cần thiết trên ARM |
+| Nghĩ `atomic` bảo vệ **object** mà `shared_ptr` trỏ tới | Chỉ ref count atomic; object vẫn cần sync |
+| Dùng `volatile` thay `atomic` | Không đủ multi-core |
+
+---
+
+### Chọn memory order — flowchart
+
+```
+Chỉ tăng counter / metric, không ai đọc data liên quan?
+  YES → relaxed
+
+Một thread ghi data, thread khác đợi signal/ index rồi đọc?
+  Producer store flag/index → release
+  Consumer load flag/index  → acquire
+  (ghi buffer TRƯỚC release)
+
+RMW (CAS, fetch) trên biến điều phối?
+  → acq_rel (success) / relaxed (failure) tùy algorithm
+
+Nhiều atomic tạo invariant phức tạp / chưa chắc?
+  → seq_cst (default), optimize sau
+```
 
 ---
 
@@ -297,6 +478,7 @@ while (!val.compare_exchange_weak(expected, expected + 1)) {}
 Two or more threads each hold a resource the other needs — everyone waits forever.
 
 **Classic example**:
+
 ```cpp
 std::mutex mtxA, mtxB;
 
@@ -312,6 +494,7 @@ void thread2() {
 ```
 
 **Four conditions for deadlock** (all must hold):
+
 1. Mutual exclusion — resource can't be shared
 2. Hold and wait — holding one while waiting for another
 3. No preemption — can't forcibly take a resource
@@ -459,11 +642,14 @@ private:
 Locks have costs: context switching, kernel calls, priority inversion risk. Lock-free algorithms use atomics to guarantee progress without blocking.
 
 **Progress guarantees**:
-| Guarantee | Meaning |
-|---|---|
-| **Blocking** | A suspended thread blocks others |
+
+
+| Guarantee     | Meaning                                              |
+| ------------- | ---------------------------------------------------- |
+| **Blocking**  | A suspended thread blocks others                     |
 | **Lock-free** | At least one thread makes progress — others may spin |
-| **Wait-free** | Every thread makes progress in bounded steps |
+| **Wait-free** | Every thread makes progress in bounded steps         |
+
 
 ---
 
@@ -549,24 +735,28 @@ private:
 
 **Use a thread pool when**:
 
-| Scenario | Why pool helps |
-|---|---|
-| **Many short-lived tasks** | Creating/destroying threads per task is expensive (~100µs each); pool amortizes that cost |
-| **Controlled parallelism** | Cap concurrency to `hardware_concurrency()` — spawning more threads than cores causes context-switch thrashing |
-| **Task queuing** | Naturally absorbs bursts; excess tasks wait in the queue instead of spawning unbounded threads |
-| **Server / request handling** | Each incoming request is a task — pool size tuned to expected load |
-| **Parallel algorithms** | Divide work into chunks, submit all, collect futures |
-| **Async I/O callbacks** | Dispatch completion handlers onto pool threads |
+
+| Scenario                      | Why pool helps                                                                                                 |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Many short-lived tasks**    | Creating/destroying threads per task is expensive (~100µs each); pool amortizes that cost                      |
+| **Controlled parallelism**    | Cap concurrency to `hardware_concurrency()` — spawning more threads than cores causes context-switch thrashing |
+| **Task queuing**              | Naturally absorbs bursts; excess tasks wait in the queue instead of spawning unbounded threads                 |
+| **Server / request handling** | Each incoming request is a task — pool size tuned to expected load                                             |
+| **Parallel algorithms**       | Divide work into chunks, submit all, collect futures                                                           |
+| **Async I/O callbacks**       | Dispatch completion handlers onto pool threads                                                                 |
+
 
 **Do NOT use a thread pool when**:
 
-| Scenario | Better alternative |
-|---|---|
-| **Long-running dedicated threads** | Explicit `std::thread` or `std::jthread` — pool threads should not be monopolized |
-| **Real-time / latency-sensitive work** | Dedicated pinned thread with elevated priority — pool scheduling adds jitter |
-| **Single one-off task** | `std::async(launch::async, ...)` is simpler |
-| **Tasks that block on I/O indefinitely** | Blocks a pool thread; use async I/O (epoll/IOCP) + pool for callbacks instead |
-| **Tasks needing thread-local affinity** | Pool threads are recycled — thread-local state may carry over from a previous task |
+
+| Scenario                                 | Better alternative                                                                 |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| **Long-running dedicated threads**       | Explicit `std::thread` or `std::jthread` — pool threads should not be monopolized  |
+| **Real-time / latency-sensitive work**   | Dedicated pinned thread with elevated priority — pool scheduling adds jitter       |
+| **Single one-off task**                  | `std::async(launch::async, ...)` is simpler                                        |
+| **Tasks that block on I/O indefinitely** | Blocks a pool thread; use async I/O (epoll/IOCP) + pool for callbacks instead      |
+| **Tasks needing thread-local affinity**  | Pool threads are recycled — thread-local state may carry over from a previous task |
+
 
 ### Sizing the Thread Pool
 
@@ -581,6 +771,7 @@ size_t num_threads = std::thread::hardware_concurrency();
 ```
 
 **Rule of thumb**:
+
 - **CPU-bound**: `N` threads where `N = hardware_concurrency()`
 - **I/O-bound**: `N * k` threads, where `k` is the blocking ratio (profile to find it)
 - **Mixed**: use separate pools for CPU and I/O work
@@ -718,6 +909,7 @@ Producer Thread(s) → [Bounded Queue] → Consumer Thread(s)
 ```
 
 **The buffer serves two purposes**:
+
 1. **Decoupling**: producer and consumer run at their own pace
 2. **Backpressure**: a bounded queue slows the producer when the consumer is overwhelmed
 
@@ -876,16 +1068,18 @@ std::thread consumer([&]{
 
 ### Sync vs Async Comparison
 
-| | **Sync (Blocking)** | **Async (Lock-Free)** |
-|---|---|---|
-| **Thread while waiting** | Sleeping | Free (yield) or spinning |
-| **Synchronization** | `condition_variable` + mutex | Atomic acquire/release |
-| **Backpressure** | Automatic (producer blocks) | Manual (`try_push` returns false) |
-| **Latency** | ~10µs (OS wakeup overhead) | ~100ns (no kernel call) |
-| **CPU usage** | Low (thread sleeps) | Higher if spin-looping |
-| **Complexity** | Low | High |
-| **Multi-producer/consumer** | Easy | Needs MPMC algorithm (harder) |
-| **Best for** | General work queues, thread pools | Audio, market data, game loops |
+
+|                             | **Sync (Blocking)**               | **Async (Lock-Free)**             |
+| --------------------------- | --------------------------------- | --------------------------------- |
+| **Thread while waiting**    | Sleeping                          | Free (yield) or spinning          |
+| **Synchronization**         | `condition_variable` + mutex      | Atomic acquire/release            |
+| **Backpressure**            | Automatic (producer blocks)       | Manual (`try_push` returns false) |
+| **Latency**                 | ~10µs (OS wakeup overhead)        | ~100ns (no kernel call)           |
+| **CPU usage**               | Low (thread sleeps)               | Higher if spin-looping            |
+| **Complexity**              | Low                               | High                              |
+| **Multi-producer/consumer** | Easy                              | Needs MPMC algorithm (harder)     |
+| **Best for**                | General work queues, thread pools | Audio, market data, game loops    |
+
 
 ---
 
@@ -917,15 +1111,17 @@ if (!q.try_push(item))
 
 ### Use Cases
 
-| Scenario | Implementation choice |
-|---|---|
-| **Thread pool task queue** | Sync bounded queue — workers block on empty |
-| **Log aggregation** | Sync queue — log threads block if aggregator is slow |
-| **Audio pipeline** | Lock-free SPSC — must not block audio callback thread |
-| **Market data feed** | Lock-free SPSC or MPSC — microsecond latency, drop on full |
-| **Video frame pipeline** | Sync queue with small buffer (2-3 frames) — backpressure to decoder |
-| **Web server request queue** | Sync bounded — shed load by blocking or returning 503 |
-| **Sensor data aggregation** | Lock-free + drop-on-full — sensors can't block |
+
+| Scenario                     | Implementation choice                                               |
+| ---------------------------- | ------------------------------------------------------------------- |
+| **Thread pool task queue**   | Sync bounded queue — workers block on empty                         |
+| **Log aggregation**          | Sync queue — log threads block if aggregator is slow                |
+| **Audio pipeline**           | Lock-free SPSC — must not block audio callback thread               |
+| **Market data feed**         | Lock-free SPSC or MPSC — microsecond latency, drop on full          |
+| **Video frame pipeline**     | Sync queue with small buffer (2-3 frames) — backpressure to decoder |
+| **Web server request queue** | Sync bounded — shed load by blocking or returning 503               |
+| **Sensor data aggregation**  | Lock-free + drop-on-full — sensors can't block                      |
+
 
 ---
 
@@ -959,12 +1155,14 @@ if (!q.try_push(item))
 
 **[Mid]** What is the difference between `std::async(launch::async, f)` and `std::thread`?
 
-> | | `std::async(launch::async)` | `std::thread` |
-> |---|---|---|
-> | Return value | `std::future<T>` — retrieves result/exception | None — must use promise/shared state manually |
-> | Exception propagation | Stored in future, rethrown on `.get()` | `std::terminate` if uncaught in thread |
-> | Lifecycle | Future destructor **blocks** until done | Must explicitly `join()` or `detach()` |
-> | Thread reuse | Implementation may use a pool | Always creates a new OS thread |
+>
+> |                       | `std::async(launch::async)`                   | `std::thread`                                 |
+> | --------------------- | --------------------------------------------- | --------------------------------------------- |
+> | Return value          | `std::future<T>` — retrieves result/exception | None — must use promise/shared state manually |
+> | Exception propagation | Stored in future, rethrown on `.get()`        | `std::terminate` if uncaught in thread        |
+> | Lifecycle             | Future destructor **blocks** until done       | Must explicitly `join()` or `detach()`        |
+> | Thread reuse          | Implementation may use a pool                 | Always creates a new OS thread                |
+>
 >
 > **Key trap**: the destructor of a `std::future` returned by `std::async(launch::async)` **blocks** until the task completes — so fire-and-forget with `std::async` doesn't work:
 >
@@ -980,9 +1178,9 @@ if (!q.try_push(item))
 
 > Both provide a way to set a value into a `future`, but at different levels:
 >
-> **`std::promise<T>`**: manual write end of a future. You call `set_value()` or `set_exception()` yourself. Use when the result is produced by arbitrary logic — not necessarily a simple function call.
+> `**std::promise<T>`**: manual write end of a future. You call `set_value()` or `set_exception()` yourself. Use when the result is produced by arbitrary logic — not necessarily a simple function call.
 >
-> **`std::packaged_task<F>`**: wraps a callable. Calling `operator()` on the task executes the function and automatically sets the result (or exception) into the associated future. Use when you want to wrap a function for deferred execution (e.g. in a task queue).
+> `**std::packaged_task<F>**`: wraps a callable. Calling `operator()` on the task executes the function and automatically sets the result (or exception) into the associated future. Use when you want to wrap a function for deferred execution (e.g. in a task queue).
 >
 > ```cpp
 > // packaged_task — wrap a function
@@ -1069,6 +1267,7 @@ if (!q.try_push(item))
 > Real-world impact: the Mars Pathfinder mission had a famous priority inversion bug causing system resets.
 >
 > **Mitigations**:
+>
 > - **Priority inheritance**: when H blocks on M held by L, L temporarily inherits H's priority until it releases M. Supported in POSIX with `PTHREAD_PRIO_INHERIT`.
 > - **Priority ceiling**: the mutex is assigned the highest priority of all threads that could lock it; any thread locking it runs at that ceiling.
 > - **Lock-free design**: eliminate mutexes in real-time paths — no blocking, no inversion possible.
@@ -1099,7 +1298,6 @@ if (!q.try_push(item))
 **[Mid]** What is the difference between `memory_order_relaxed` and `memory_order_seq_cst`?
 
 > - `relaxed`: only guarantees atomicity of the individual operation — no ordering constraints relative to other memory operations. Other reads/writes can be reordered around it by CPU or compiler. Cheapest.
->
 > - `seq_cst`: imposes a **single total order** on all `seq_cst` atomic operations across all threads. Every thread agrees on the same global sequence. Most expensive — requires a full memory fence on ARM/Power architectures.
 >
 > ```cpp
@@ -1146,6 +1344,48 @@ if (!q.try_push(item))
 
 ---
 
+**[Mid]** `memory_order_acquire` và `memory_order_release` dùng trên **load** hay **store**?
+
+> - **Release** chỉ hợp lệ trên **store** (và RMW success với acq_rel): “tôi đã publish xong mọi write trước đó”.  
+> - **Acquire** chỉ hợp lệ trên **load** (và RMW): “tôi subscribe — mọi read sau này thấy data đã publish”.  
+> - Cặp điển hình: producer `ready.store(true, release)` + consumer `while (!ready.load(acquire))`.  
+> - Dùng nhầm (ví dụ `load(..., release)`) là lỗi compile hoặc semantics sai.
+
+---
+
+**[Mid]** Tại sao `++counter` trên `atomic` mặc định là `seq_cst` trong khi counter thống kê chỉ cần `relaxed`?
+
+> `operator++` không nhận memory order — nó hard-code `seq_cst` để an toàn cho người mới. Với metric chỉ cần atomicity, dùng `fetch_add(1, memory_order_relaxed)` rõ ràng và có thể nhanh hơn trên ARM. Đừng dùng `relaxed` cho biến vừa là counter vừa là “ready flag” cho data khác.
+
+---
+
+**[Senior]** Giải thích lại SPSC `try_push`/`try_pop`: tại sao `tail_.load(relaxed)` nhưng `head_.load(acquire)`?
+
+> Mỗi thread **chỉ ghi** index của mình (`tail` producer, `head` consumer) — load relaxed index “của mình” không cần sync với thread kia. Khi producer kiểm tra **head** (do consumer sửa), cần **acquire** để thấy mọi thứ consumer đã **release** khi advance head (đã đọc/xử lý slot). Sau khi ghi `buf_[tail]`, producer **release** store `tail` để consumer **acquire** load `tail` thấy item mới. Đây là directed sync hai chiều, không cần `seq_cst` global.
+
+---
+
+**[Senior]** `compare_exchange` có hai memory order — giải thích.
+
+> ```cpp
+> bool compare_exchange_weak(T& expected, T desired,
+>                            std::memory_order success,
+>                            std::memory_order failure);
+> ```
+> - **Success:** thường `acq_rel` hoặc `release`/`acquire` tùy algorithm — publish state mới, thấy state cũ đúng.  
+> - **Failure:** thường `relaxed` — chỉ reload `expected`, chưa thay đổi shared state, không cần sync payload.  
+> Ví dụ lock-free stack: success `acq_rel`, failure `relaxed`.
+
+---
+
+**[Senior]** x86 vs ARM — memory order có khác thực tế không?
+
+> **x86** có **TSO** (Total Store Order): load-load, load-store, store-store không reorder với nhau (store-load có thể reorder). Nhiều code “tưởng” plain bool flag đủ vẫn chạy trên x86 dev machine — **sai trên ARM**.  
+> **ARM/POWER** reorder mạnh → **phải** dùng atomic + đúng order; `seq_cst` và acquire/release phát huy fence thật.  
+> **Bài học:** không benchmark ordering chỉ trên x86; CI hoặc test trên ARM / dùng TSan.
+
+---
+
 ### Deadlock & Condition Variables
 
 ---
@@ -1153,17 +1393,13 @@ if (!q.try_push(item))
 **[Mid]** You have a deadlock in production. Walk through how you would diagnose it.
 
 > 1. **Get a thread dump**: on Linux, `kill -SIGABRT <pid>` or attach with `gdb` and run `thread apply all bt` — shows all thread stacks and what lock each is waiting on.
->
 > 2. **Use thread sanitizer (TSan)**: recompile with `-fsanitize=thread`. TSan detects deadlocks and data races at runtime with detailed reports including stack traces.
->
 > 3. **Look for the cycle**: in the stack trace, identify threads stuck in `pthread_mutex_lock` (or similar). Map out which mutex each holds and which each is waiting for. A cycle confirms deadlock.
->
 > 4. **Common causes to check**:
->    - Lock ordering inconsistency (most common)
->    - Lock held across a callback that re-enters the same lock
->    - `recursive_mutex` needed but plain `mutex` used
->    - Lock held while calling external code that locks the same mutex
->
+>   - Lock ordering inconsistency (most common)
+>   - Lock held across a callback that re-enters the same lock
+>   - `recursive_mutex` needed but plain `mutex` used
+>   - Lock held while calling external code that locks the same mutex
 > 5. **Fix**: enforce consistent lock ordering, use `std::scoped_lock` for multi-lock acquisition, prefer lock hierarchies.
 
 ---
@@ -1173,7 +1409,6 @@ if (!q.try_push(item))
 > Two reasons:
 >
 > 1. **Spurious wakeups**: `cv.wait()` can return without `notify` being called — this is an explicit allowance in POSIX and the C++ standard (for implementor flexibility on certain platforms). Without a loop, spurious wakeups cause the consumer to proceed on a false condition.
->
 > 2. **Lost wakeup / TOCTOU**: between `wait()` returning and the lock being re-acquired, another thread may have consumed the item. The condition may no longer be true.
 >
 > ```cpp
@@ -1260,6 +1495,7 @@ if (!q.try_push(item))
 > **ABA**: Thread 1 reads value `A` from an atomic. Thread 2 changes it `A → B → A`. Thread 1 does a CAS expecting `A` — it succeeds, but the intermediate state `B` (a different object at the same address, or modified state) is missed. Thread 1 incorrectly assumes nothing changed.
 >
 > **Classic example** — lock-free stack:
+>
 > ```
 > Stack: A → B → C
 > Thread 1 reads head = A, plans to pop A, set head = B
@@ -1270,17 +1506,16 @@ if (!q.try_push(item))
 > **Solutions**:
 >
 > 1. **Tagged pointer / version counter**: pack a version number with the pointer in a 128-bit atomic. CAS on the pair — even if address matches, the version number won't.
+>
 > ```cpp
 > struct TaggedPtr { Node* ptr; uint64_t tag; };
 > std::atomic<TaggedPtr> head;
 > // CAS checks both ptr and tag — ABA prevented
 > ```
 >
-> 2. **Hazard pointers**: before accessing a node, publish its address in a thread-local "hazard" slot. Reclamation checks all hazard slots — if a pointer is hazardous, defer free. Node is never reallocated while any thread has it hazard-registered.
->
-> 3. **RCU (Read-Copy-Update)**: readers run lock-free, writers create a copy, update, then swap atomically. Old version freed after a "grace period" when all readers have passed through.
->
-> 4. **Epoch-based reclamation**: track which "epoch" each thread is in; only reclaim memory from epochs all threads have advanced past.
+> 1. **Hazard pointers**: before accessing a node, publish its address in a thread-local "hazard" slot. Reclamation checks all hazard slots — if a pointer is hazardous, defer free. Node is never reallocated while any thread has it hazard-registered.
+> 2. **RCU (Read-Copy-Update)**: readers run lock-free, writers create a copy, update, then swap atomically. Old version freed after a "grace period" when all readers have passed through.
+> 3. **Epoch-based reclamation**: track which "epoch" each thread is in; only reclaim memory from epochs all threads have advanced past.
 
 ---
 
@@ -1321,6 +1556,7 @@ if (!q.try_push(item))
 > ```
 >
 > **What not to do** — the broken double-checked locking pattern (pre-C++11):
+>
 > ```cpp
 > if (!inst_) {           // unsynchronized read — data race before C++11
 >     lock();
@@ -1328,4 +1564,6 @@ if (!q.try_push(item))
 >     unlock();
 > }
 > ```
+>
 > In C++11 this can be fixed with `std::atomic<Config*>` and release/acquire semantics, but the Meyers singleton is simpler and preferred.
+

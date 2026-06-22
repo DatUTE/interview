@@ -1,5 +1,7 @@
 # Low-Latency System Design & Initialization
 
+> **Related:** [realtime_media_voip_webrtc.md](realtime_media_voip_webrtc.md) (jitter buffer, RTP) · [networking.md](networking.md) (WebSocket, TCP tuning)
+
 ## What Is Low Latency?
 
 ```
@@ -292,6 +294,145 @@ void* p = mmap(nullptr, size, PROT_READ|PROT_WRITE,
                MAP_PRIVATE|MAP_ANONYMOUS|MAP_POPULATE, -1, 0);
 // MAP_POPULATE: prefaults synchronously during mmap call
 ```
+
+### CPU Cache & Sequential Containers (`vector`, `array`)
+
+> Chi tiết STL & so sánh container: [stl_containers.md](stl_containers.md) § Cache Locality
+
+Trong hệ **low-latency**, thường **duyệt** container nhiều hơn **insert/xóa** giữa chừng. **Bộ nhớ liên tục** (sequential) giúp CPU cache và hardware prefetcher — lý do `std::vector` / `std::array` thường thắng `std::list` dù Big-O insert khác nhau.
+
+#### CPU cache hierarchy (tóm tắt)
+
+```
+CPU core
+  L1d  ~32 KB, ~4 cycles   — data cache
+  L1i  ~32 KB              — instruction cache
+  L2   ~256 KB–1 MB, ~12 cycles
+  L3   shared, MB-scale, ~40+ cycles
+  RAM  ~100 ns (hundreds of cycles)
+
+Cache line (typical): 64 bytes — đơn vị load/store từ RAM → cache
+```
+
+| Khái niệm | Ý nghĩa |
+|-----------|---------|
+| **Spatial locality** | Truy cập địa chỉ A → CPU load cả **cache line** chứa A và hàng xóm |
+| **Temporal locality** | Truy cập lại cùng vùng sớm → hit L1/L2 |
+| **Cache miss** | Dữ liệu không trong cache → stall chờ RAM |
+| **Prefetcher** | CPU đoán **truy cập tuần tự** và load trước cache line tiếp theo |
+
+#### Sequential traversal — `vector` / `array`
+
+```cpp
+// Elements contiguous in memory
+std::vector<int> v = /* ... */;
+for (int x : v) { sum += x; }           // ideal: stride = sizeof(int)
+
+std::array<double, 1024> a{};
+for (std::size_t i = 0; i < a.size(); ++i)
+    process(a[i]);                        // same cache line holds nhiều double
+```
+
+```
+vector.data() →  [e0][e1][e2][e3]...[e15] | [e16]...
+                  └──── 64 B cache line ────┘
+                  sequential ++i → prefetcher loads next line early
+```
+
+**Vì sao nhanh trên hot path:**
+
+1. Một cache miss → lấy **nhiều phần tử** cùng lúc (line 64B = 16× `int` hoặc 8× `double`).  
+2. Hardware **stride prefetch** nhận pattern `for (i=0..n-1)`.  
+3. Compiler có thể **vectorize** (AVX: 8 float/cycle).  
+4. **TLB:** ít page hơn so với nhiều allocation rời (`list`).
+
+#### `std::list` — phá sequential access
+
+```
+list:  [node0]→[node1]→[node2]   (mỗi node heap riêng, pointer chase)
+         ↓       ↓       ↓
+       cache miss mỗi bước — prefetcher khó đoán địa chỉ
+```
+
+| Pattern | `vector`/`array` | `std::list` |
+|---------|------------------|-------------|
+| `for (x : c)` full scan | Rất nhanh | Chậm (pointer chase) |
+| Insert giữa chừng O(1) | O(n) shift | O(1) |
+| `find` + erase scan | Thường **vẫn nhanh hơn list** vì scan sequential | O(1) erase sau khi tìm iterator |
+
+**Quy tắc low-latency:** default container = **`vector`**; `reserve()` trước hot loop; tránh `push_back` trong inner loop nếu gây realloc.
+
+```cpp
+std::vector<Event> events;
+events.reserve(expected_count);   // một lần — không realloc trên hot path
+for (...) events.emplace_back(...);
+
+// Hot loop — chỉ read
+for (const auto& e : events)
+    dispatch(e);
+```
+
+#### `std::array` vs `std::vector`
+
+| | `std::array<T,N>` | `std::vector<T>` |
+|---|-------------------|------------------|
+| Storage | Stack hoặc embedded trong object | Heap (thường) |
+| Size | Compile-time `N` | Runtime |
+| Cache | Contiguous — giống vector | Contiguous |
+| Low-latency | Fixed buffers, ring index, stack hot structs | Dynamic collections, `reserve` |
+
+```cpp
+// Stack — zero alloc, predictable address (watch stack limit)
+std::array<Order, 256> ring;
+
+// vector backing store for SPSC — still contiguous
+std::array<T, 4096> buf_;  // in SPSCQueue — cache-friendly ring
+```
+
+#### AoS vs SoA khi duyệt một field
+
+```cpp
+// AoS — duyệt chỉ .price: load cả struct → lãng phí cache line
+struct Tick { double price, volume; uint64_t ts; };
+std::vector<Tick> ticks;
+
+// SoA — duyệt price: mỗi cache line toàn price → tối đa throughput
+struct TickSoA {
+    std::vector<double> price;
+    std::vector<double> volume;
+    std::vector<uint64_t> ts;
+};
+```
+
+Dùng **SoA** khi hot loop chỉ đụng 1–2 field; **AoS** khi luôn đọc cả object.
+
+#### Software prefetch (khi stride không đủ cho hardware)
+
+```cpp
+#include <xmmintrin.h>  // _mm_prefetch
+
+void process(const std::vector<LargeObject>& v) {
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (i + 8 < v.size())
+            _mm_prefetch(reinterpret_cast<const char*>(&v[i + 8]), _MM_HINT_T0);
+        hot_work(v[i]);
+    }
+}
+```
+
+Chỉ dùng khi `perf` chứng minh cache miss cao — prefetch sai làm **chậm hơn**.
+
+#### `deque` — giữa vector và list
+
+Contiguous **từng chunk**, không một block duy nhất — sequential scan vẫn ổn nhưng kém `vector` một chút khi cross chunk boundary.
+
+#### Checklist low-latency iteration
+
+- [ ] Hot path: `vector`/`array`, `reserve`, không realloc trong loop  
+- [ ] Tránh `list`/`map` node traversal trên path tần số cao  
+- [ ] Struct lớn: cân SoA vs AoS  
+- [ ] `alignas(64)` cho atomics/counters (false sharing) — khác nhưng liên quan cache line  
+- [ ] Đo: `perf stat -e cache-misses,cache-references` hoặc `perf mem record`
 
 ### Cache-Friendly Data Layout
 
@@ -889,6 +1030,18 @@ The SPSC (Single Producer Single Consumer) ring buffer relies on the invariant t
 **Q [Senior]: Walk through all the sources of latency jitter on a Linux system and how to eliminate each.**
 
 Starting from hardware: **C-state transitions** (CPU sleeping in C2/C6 takes µs to wake — fix: disable deep C-states in BIOS/kernel). **CPU frequency scaling** (turbo spikes and P-state transitions cause frequency variance — fix: `performance` governor, disable turbo). At OS level: **scheduler interruptions** (OS places other tasks on your core — fix: `isolcpus`, SCHED_FIFO). **Timer tick** (kernel fires 250–1000 Hz scheduling tick even on idle core — fix: `nohz_full`). **IRQ delivery** (NIC interrupts land on your core — fix: irqbalance off, pin IRQs). **Page faults** (first memory access pages in from disk — fix: `mlockall`, MAP_POPULATE). **THP compaction** (khugepaged migrates pages in background — fix: disable THP). At application level: **heap allocation** (malloc has locks — fix: pre-allocated pools). **False sharing** (two threads on adjacent cache-line data — fix: `alignas(64)`). **Virtual dispatch** (indirect call misses in branch predictor — fix: CRTP or function pointer tables).
+
+---
+
+**Q [Mid]: Tại sao duyệt `std::vector` nhanh hơn `std::list` trong hệ low-latency dù list có O(1) insert?**
+
+> Hot path thường là **scan toàn bộ** (sum, filter, dispatch) chứ không insert giữa chừng liên tục. `vector`/`array` lưu phần tử **liên tục** — mỗi cache line 64B chứa nhiều phần tử, hardware prefetcher load trước line tiếp theo khi `for (i++)`. `list` mỗi node rải rác heap — mỗi bước `next` là pointer chase, cache miss liên tiếp, không SIMD. Insert O(1) của list không cứu được scan O(n) chậm hơn vector scan trong thực tế. Low-latency: `vector` + `reserve`, erase từ cuối hoặc batch rebuild nếu cần.
+
+---
+
+**Q [Senior]: Giải thích spatial locality khi iterate `std::array<double, 1000>`.**
+
+> Phần tử nằm liên tiếp (stack hoặc trong object). Khi đọc `a[i]`, CPU load cache line 64B — thường chứa 8 `double`. Các lần đọc `a[i+1]..a[i+7]` hit L1. Prefetcher thấy stride 8 byte → fetch line kế tiếp trước khi cần. Throughput gần băng thông memory; latency mỗi access amortized thấp. Đổi sang `list<double>` cùng 1000 phần tử: mỗi `*` theo pointer mới → miss rate cao, tail latency tăng — quan trọng cho p99.
 
 ---
 

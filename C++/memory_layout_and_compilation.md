@@ -1,5 +1,7 @@
 # Memory Layout & Compilation Process in C++
 
+> **Ownership & segment overview (stack/heap/static, RAII):** [core_cpp_memory_and_ownership.md](core_cpp_memory_and_ownership.md) § Process Memory Layout
+
 ---
 
 ## 1. Process Memory Layout

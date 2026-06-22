@@ -17,6 +17,137 @@
 | Thread | Each thread has its own stack | Shared across all threads |
 | Access pattern | LIFO, contiguous, cache-friendly | Random, pointer-chased, cache-unfriendly |
 
+> **Đọc thêm (ELF, linking, virtual memory, compilation):** [memory_layout_and_compilation.md](memory_layout_and_compilation.md)
+
+---
+
+### Process Memory Layout — Text, Data, BSS, Heap, Stack
+
+Khi OS load chương trình C++, mỗi process có **virtual address space** riêng. Ngoài stack/heap, còn các **segment tĩnh** map từ file executable (ELF trên Linux, PE trên Windows).
+
+```
+High address
+┌─────────────────────────────┐
+│         Kernel space        │  User code không truy cập được
+├─────────────────────────────┤
+│           Stack             │  Local vars, call frames — ↓ grows down
+│             ↓               │
+│        [guard page]         │  Unmapped — stack overflow → SIGSEGV
+│                             │
+│             ↑               │
+│           Heap              │  new/malloc — ↑ grows up
+├─────────────────────────────┤
+│   Memory-mapped regions     │  Shared libs (.so), mmap(), anon mapping
+├─────────────────────────────┤
+│   Thread-local storage (TLS)│  thread_local — per-thread copies
+├─────────────────────────────┤
+│         BSS                 │  Uninitialized static/global (zeroed at load)
+├─────────────────────────────┤
+│         Data (.data)        │  Initialized static/global
+├─────────────────────────────┤
+│    Read-only data (.rodata) │  String literals, const globals
+├─────────────────────────────┤
+│         Text (.text)        │  Machine code — Read + Execute only
+├─────────────────────────────┤
+│     Program headers (ELF)   │
+Low address
+```
+
+#### Bảng segment
+
+| Segment | ELF section | Nội dung | Permission | Lifetime |
+|---------|-------------|----------|------------|----------|
+| **Text (code)** | `.text` | Hàm, vtable code, jump tables | r-x | Cả process |
+| **Read-only data** | `.rodata` | String literals `"hello"`, `const` global init | r-- | Cả process |
+| **Data** | `.data` | Global/static **có** initializer (`= 42`) | rw- | Cả process |
+| **BSS** | `.bss` | Global/static **không** init hoặc `= 0` | rw- | Cả process; OS zero-fill |
+| **Heap** | *(runtime)* | `new`, `malloc`, container backing | rw- | Đến khi `delete`/`free` |
+| **Stack** | *(runtime)* | Locals, params, return addr | rw- | Đến hết scope / unwind |
+| **mmap** | `.so` segments | libc, plugins, `mmap()` file | varies | Until unmap |
+| **TLS** | `.tdata` / `.tbss` | `thread_local` variables | rw- | Per thread |
+
+**LMA vs VMA (.data):** giá trị khởi tạo nằm trong file ELF (Load Memory Address — thường Flash/disk); lúc startup, **startup code** copy sang RAM (Virtual Memory Address). `.bss` không chiếm bytes trên disk — loader chỉ zero vùng RAM.
+
+#### Code map → segment
+
+```cpp
+// ── .text ── machine code for all functions
+void foo(int x) { /* ... */ }
+
+// ── .rodata ── string literal bytes (read-only)
+const char* greeting = "hello";   // "hello" → .rodata; pointer greeting → .data nếu global
+
+// ── .data ── initialized static storage duration
+int g_initialized = 42;           // global
+static int s_count = 1;           // file scope static
+void bar() {
+    static int call_once = 10;    // static local — .data, init once
+}
+
+// ── .bss ── zero-initialized
+int g_zero;                       // → 0
+static char big_buf[4096];        // → all '\0'
+
+// ── stack ── automatic storage duration
+void baz() {
+    int local = 5;                // stack frame
+    int* p = &local;              // p on stack, points into stack
+}
+
+// ── heap ── dynamic
+void qux() {
+    auto v = std::make_unique<int>(7);  // object on heap; unique_ptr metadata on stack
+}
+
+// ── TLS ── one instance per thread
+thread_local int tls_id = 0;
+```
+
+#### String literal — hay sai phỏng vấn
+
+```cpp
+char* bad = "hello";              // C legacy: sometimes writable on old systems — UB if write
+const char* ok = "hello";         // correct: literal in .rodata
+char good[] = "hello";            // copy vào stack — writable
+
+// Ghi vào literal → SIGSEGV (write to .rodata)
+// *bad = 'H';  // crash on modern Linux
+```
+
+#### Static/global vs stack vs heap — ownership
+
+| Storage | Ai “sở hữu” lifetime | RAII áp dụng? |
+|---------|----------------------|---------------|
+| Stack local | Scope / unwinding | Có — destructor khi scope exit |
+| Heap | Programmer / smart pointer | Có — `unique_ptr` destructor gọi `delete` |
+| Static/global | Toàn process | Destructor `~T()` chạy **at exit** (order phức tạp giữa translation units) |
+| String literal | Process, read-only | Không delete |
+
+**Static destruction order fiasco:** tránh global object phụ thuộc init order của global khác translation unit — dùng function-local static (Meyers singleton) thay global.
+
+#### Xem segment trên Linux
+
+```bash
+# Virtual memory map của process
+cat /proc/self/maps
+
+# Symbol sections trong binary
+readelf -S ./a.out    # .text .data .bss .rodata ...
+size ./a.out          # sizes of text/data/bss
+
+# objdump disassembly
+objdump -d -j .text ./a.out | head
+```
+
+Ví dụ `/proc/pid/maps` (rút gọn):
+
+```
+00400000-00401000 r-xp  ... a.out        ← .text
+00600000-00601000 r--p  ... a.out        ← .rodata
+00601000-00602000 rw-p  ... a.out        ← .data + .bss
+7fff...           rw-p  ... [stack]
+```
+
 ---
 
 ### What Lives on the Stack
@@ -127,39 +258,44 @@ auto big = std::make_unique<int[]>(1000000); // 4 MB on heap → fine
 
 ---
 
-### What Lives in Neither (Static / Global Storage)
+### Static / Global / TLS (not stack, not heap)
+
+Các biến **static storage duration** nằm trong **.data / .bss / .rodata / TLS** — xem bảng segment ở trên.
 
 ```cpp
-// Global variables — .data or .bss segment (not stack, not heap)
 int g_count = 0;                   // .data  (initialized)
-static double g_ratio;             // .bss   (zero-initialized)
+static double g_ratio;             // .bss   (zero-initialized → 0.0)
 
-// String literals — .rodata segment (read-only)
-const char* msg = "hello";         // "hello" is in .rodata, msg ptr is on stack
+const char* msg = "hello";         // "hello" → .rodata; msg → .data if global, stack if local ptr
 
-// Static local variables — .data segment, initialized once
 void foo() {
-    static int call_count = 0;     // survives across calls, NOT on stack
+    static int call_count = 0;     // .data — survives calls, NOT stack
     ++call_count;
 }
 
-// Thread-local storage
-thread_local int tls_id = 0;       // one copy per thread, in TLS segment
+thread_local int tls_id = 0;       // TLS segment — one copy per thread
 ```
+
+**Khác heap:** không `new`/`delete`; lifetime = cả process (hoặc cả thread với `thread_local`). Destructor global chạy lúc `exit()` — tránh phụ thuộc order giữa file khác nhau.
+
+→ Chi tiết ELF, linker script, startup `main` trước: [memory_layout_and_compilation.md](memory_layout_and_compilation.md) §1–2
 
 ---
 
-### Quick Decision: Stack or Heap?
+### Quick Decision: Stack, Heap, or Static?
 
 ```
 Is the size known at compile time?
 ├─ No  → heap (new / vector / unique_ptr)
-└─ Yes → Does it need to outlive the current scope?
-          ├─ Yes → heap (return via smart pointer)
+└─ Yes → Must survive function return?
+          ├─ Yes, whole program → static/global (careful: init order) or heap + smart_ptr
+          ├─ Yes, per thread only → thread_local
           └─ No  → Is it small enough? (rough guide: < 1–16 KB)
                     ├─ Yes → stack (local variable, struct, small array)
                     └─ No  → heap (large array, big object)
 ```
+
+**Segment reminder:** stack/heap là runtime; `.text/.data/.bss/.rodata` map từ binary lúc load.
 
 ```cpp
 // PREFER stack when possible — faster, no leak risk, cache-friendly
@@ -957,6 +1093,37 @@ Need ownership?
 > ```
 >
 > Fix: return by value, or allocate on the heap (via smart pointer).
+
+---
+
+**[Mid]** Giải thích các segment bộ nhớ: `.text`, `.data`, `.bss`, `.rodata`, heap, stack.
+
+> **`.text`:** mã máy (hàm) — read+execute, không ghi. Ghi vào đây → SIGSEGV.  
+> **`.rodata`:** dữ liệu read-only — string literals, hằng global.  
+> **`.data`:** biến global/static **đã khởi tạo** (giá trị lưu trong file ELF, copy vào RAM lúc start).  
+> **`.bss`:** global/static **chưa init** hoặc zero-init — không tốn disk, OS zero RAM.  
+> **Heap:** `new`/`malloc`, grow upward, lifetime thủ công hoặc smart pointer.  
+> **Stack:** local, frame, grow downward, auto destroy khi scope/unwind.  
+> Thứ tự địa chỉ ảo (Linux x86-64 điển hình): text/data thấp → heap ↑ → stack ↓ cao.
+
+---
+
+**[Mid]** Khác nhau `.data` và `.bss`? Tại sao tách?
+
+> **`.data`** chứa initial values (phải lưu trong binary). **`.bss`** chỉ cần kích thước — loader zero-fill, tiết kiệm dung lượng file và thời gian đọc disk. Ví dụ `static char buf[1<<20];` thường vào `.bss` (1 MB zeros không ghi vào ELF).
+
+---
+
+**[Senior]** `char s[] = "hi"` vs `char* s = "hi"` — segment và ownership?
+
+> `char s[] = "hi"` — array **5 bytes trên stack** (copy literal), writable.  
+> `char* s = "hi"` — pointer (stack nếu local); `"hi"` **6 bytes trong `.rodata`**, shared read-only. Ghi `s[0]='H'` → UB/crash. Ownership: array stack theo RAII scope; literal sống cả process, không free. Phỏng vấn hay hỏi vì nhầm với C++ string.
+
+---
+
+**[Senior]** Static local `static Foo x;` — constructor/destructor chạy khi nào? Segment nào?
+
+> Object trong **.data/.bss** (tùy init). Constructor chạy **lần đầu** thread vào block (C++11 thread-safe init). Destructor chạy **at program exit** (trong reverse order với các static cùng scope translation unit). Khác stack local destructor khi return — static sống đến `exit()`.
 
 ---
 

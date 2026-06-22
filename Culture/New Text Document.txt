@@ -1,0 +1,28 @@
+1. Introduce yourself
+	Hello, my name is Dat. I'm a C++ software engineer with around 4 years of experience across telecommunications, automotive, and Chromium-based browser development.
+	My technical background includes modern C++, object-oriented programming, data structures and algorithms, multithreading and concurrency, design patterns, and unit testing.
+	I'm also familiar with Linux and scripting languages such as Node.js, Python, and Bash. In addition, I have experience working in both Agile and V-model software development environments.
+	Regarding soft skills, I’m sociable, eager to learn, and have good presentation and time management skills.
+2. Why are you looking for a new opportunity?
+	I’m looking for a new opportunity because I want to explore new domains, challenge myself, and continue growing as a software engineer. I’d like to apply my experience in C++ and system development
+	to new technical challenges while also contributing to your project and learning from the team.
+3. Tell me about a conflict in your team.
+	In one project, I had a disagreement with another team regarding code improvement. I wanted to introduce a newer approach to improve maintainability and code quality, but the team preferred not 
+	to modify the existing implementation because it was already stable in production. I explained the potential long-term risks and technical benefits of the improvement, but I also understood their
+	concerns about stability and delivery timelines. Even though the change was not adopted immediately, the experience taught me how to communicate technical ideas more effectively 
+	and balance engineering improvements with business priorities.
+4. what is your expect in our company?
+	I’m looking for a dynamic working environment with interesting technical challenges and opportunities to grow. I also appreciate a flexible and open culture where people can share ideas freely 
+	and managers are willing to listen to different perspectives.
+5. how do you apply an AI agent in your task?
+	I use AI as a productivity and learning assistant in my daily work. It helps me understand large codebases faster, generate implementation ideas, assist with debugging, and automate small tasks or scripts.
+	I also use it for code reviews and learning new technologies. However, I always verify the output carefully before applying it to production code, especially in system-level C++ development
+	where reliability and performance are critical.
+6. how to you ensure code quality
+	I ensure code quality by writing clean and maintainable code, following coding standards, and applying proper design principles. I also rely on unit testing, code reviews, debugging tools, 
+	and static analysis to catch issues early. In C++ projects, I pay special attention to memory management, concurrency issues, and performance. Before merging code, I also verify that my 
+	changes do not affect existing functionality and meet project requirements.
+7. What does your company do?
+	My company develops a Chromium-based browser product across desktop, Android, and iOS platforms. In addition to standard browser features, our product integrates a built-in Web3 wallet to 
+	support blockchain and crypto-related functionality. We are also focusing on building an agentic browser experience, where AI-powered features can assist users with browsing, productivity, 
+	and automation tasks. My role mainly involves developing and integrating browser features on top of the Chromium codebase.

@@ -1,5 +1,7 @@
 # STL Containers & Data Structures in C++
 
+> **CPU cache & sequential scan (low-latency):** [low_latency.md](low_latency.md) § CPU Cache & Sequential Containers · §10 bên dưới
+
 ---
 
 ## Container Categories
@@ -104,6 +106,18 @@ std::array<int, 5> b;
 // Unlike vector, array<int,0> is valid but has no elements
 std::array<int, 0> empty;
 empty.data();  // may return nullptr or unique address — implementation-defined
+```
+
+### `std::array` & cache
+
+- Kích thước **compile-time** — thường trên **stack** hoặc embedded trong struct/class.  
+- Layout **contiguous** giống `vector` → cùng lợi ích spatial locality khi `for (x : a)`.  
+- Low-latency: ring buffer cố định, lookup table, small batch trên stack (tránh stack overflow).
+
+```cpp
+std::array<float, 64> coeffs;  // 256 B — vài cache lines, all in L1 after warm-up
+for (float c : coeffs)
+    y += c * x;
 ```
 
 ---
@@ -214,6 +228,33 @@ v.emplace_back(1, 2);        // constructs Point DIRECTLY in vector's storage
 - When cache performance matters — contiguous layout is cache-friendly
 - Passing data to C APIs (`v.data()`, `v.size()`)
 - As a stack (push_back / pop_back)
+
+### Cache & sequential access (`vector`)
+
+`std::vector` tối ưu **duyệt tuần tự** — core của nhiều hot path low-latency.
+
+```
+data() →  [0][1][2]...[15] | [16]...
+           └── cache line 64B ──┘
+for (auto x : v)  → spatial locality + hardware prefetch
+```
+
+| Yếu tố | Ảnh hưởng |
+|--------|-----------|
+| Contiguous | Một cache miss → nhiều phần tử |
+| `reserve(n)` | Không realloc giữa hot loop |
+| Small `T` | Nhiều phần tử / cache line |
+
+```cpp
+std::vector<int> v;
+v.reserve(n);
+for (std::size_t i = 0; i < n; ++i)
+    v.emplace_back(...);
+for (int x : v)
+    process(x);   // prefer scan-only on hot path
+```
+
+→ So sánh đầy đủ vector/array/list: **§10 Cache Locality**
 
 ---
 
@@ -348,6 +389,7 @@ Despite O(1) insert, `std::list` is often **slower than `std::vector`** in pract
 ```cpp
 // Benchmark reality: for n=10000, vector find + erase is often FASTER than list
 // because vector's sequential scan fits in cache; list's scattered nodes do not
+// See: low_latency.md § CPU Cache & Sequential Containers
 ```
 
 ---
@@ -745,7 +787,79 @@ void dijkstra(int src, const std::vector<std::vector<std::pair<int,int>>>& adj) 
 
 ---
 
-## 10. Iterator Categories
+## 10. Cache Locality — Sequence Containers (vector, array, list, deque)
+
+### Tại sao CPU cache quan trọng hơn Big-O insert?
+
+Thuật toán textbooks đếm **phép so sánh**. CPU thực tế đếm **cycles chờ RAM**. Duyệt `n` phần tử:
+
+```
+vector scan:  ~ n / (elements_per_cache_line)  memory accesses (sau warm L1)
+list scan:    ~ n  pointer chases, often n cache misses
+```
+
+**Elements per cache line (64B):**
+
+| `T` | ~count/line |
+|-----|-------------|
+| `int` | 16 |
+| `double` | 8 |
+| `struct` 32B | 2 |
+| `struct` 128B | 0.5 (mỗi phần tử > 1 line) |
+
+Struct **phình to** → ít phần tử/line → cân nhắc SoA ([low_latency.md](low_latency.md)).
+
+### So sánh duyệt tuần tự
+
+| Container | Memory layout | Sequential `for` | Prefetcher | SIMD |
+|-----------|---------------|------------------|------------|------|
+| **`std::array`** | Contiguous fixed | ★★★★ | ★★★★ | ★★★★ |
+| **`std::vector`** | Contiguous heap | ★★★★ | ★★★★ | ★★★★ |
+| **`std::deque`** | Chunked contiguous | ★★★ | ★★★ | ★★ |
+| **`std::list`** | Scattered nodes | ★ | ★ | ✗ |
+| **`forward_list`** | Scattered singly | ★ | ★ | ✗ |
+
+### Khi nào vẫn chọn `list`?
+
+- Iterator **stable** khi insert/erase giữa chừng (iterator không invalidate như vector)  
+- Phần tử **rất lớn** — move cost cao, không muốn shift vector  
+- Số phần tử **nhỏ** và thao tác chủ yếu insert giữa, không full scan  
+
+Low-latency engine: thường **vector + erase-remove idiom** hoặc **index freelist** thay list.
+
+```cpp
+// Erase-remove (vector) — giữ contiguous sau purge
+v.erase(std::remove_if(v.begin(), v.end(), pred), v.end());
+```
+
+### `deque` vs `vector` cho scan
+
+`deque` map index → chunk; full scan vẫn sequential trong chunk nhưng **jump chunk** có thể miss thêm. Rule: default **vector**; `deque` khi cần `push_front` O(1) mà vẫn random access.
+
+### Low-latency patterns
+
+```cpp
+// 1. Pre-size — no realloc during tick
+std::vector<Tick> ticks;
+ticks.resize(max_ticks_per_frame);
+
+// 2. Fixed ring — array index modulo N
+std::array<Tick, 4096> ring;
+std::size_t head = 0, tail = 0;
+
+// 3. Contiguous priority — vector sort/partition thay multiset khi n nhỏ
+```
+
+### Đo thực tế
+
+```bash
+perf stat -e cache-references,cache-misses ./benchmark
+# High miss rate on list scan → switch to vector verified by data
+```
+
+---
+
+## 11. Iterator Categories
 
 Iterators are the glue between containers and algorithms. Each container provides iterators of a specific category, determining which algorithms it supports.
 
@@ -784,7 +898,7 @@ for (auto it = v.rbegin(); it != v.rend(); ++it)
 
 ---
 
-## 11. Common Algorithms with Containers
+## 12. Common Algorithms with Containers
 
 ```cpp
 #include <algorithm>
@@ -822,7 +936,7 @@ auto it = std::ranges::find(v, 3);
 
 ---
 
-## 12. Choosing the Right Container
+## 13. Choosing the Right Container
 
 ```
 Do you know the size at compile time?
@@ -948,6 +1062,18 @@ Do you need highest/lowest priority element?
 > if (m.contains("b"))
 >     int x = m["b"];
 > ```
+
+---
+
+**[Mid]** Why does iterating `std::vector` beat `std::list` even when list has cheaper insertion?
+
+> Iteration dominates most hot loops (transform, accumulate, dispatch). Vector stores elements in one contiguous block — CPU loads 64-byte cache lines containing many elements, and the hardware prefetcher detects sequential access. List nodes are scattered on the heap — each step follows a pointer to a new address, causing cache misses and preventing SIMD. Big-O says list insert is O(1), but scan is still O(n) with a **much larger constant**. For low-latency systems, prefer vector with `reserve`, and only use list when you truly need stable iterators and rarely scan.
+
+---
+
+**[Senior]** Explain how cache lines affect `std::array<int, 10000>` vs `std::list<int>` with 10000 nodes.
+
+> `array<int,10000>`: 40KB contiguous — ~625 cache lines, sequential access touches each line once in order, high L1/L2 hit rate after warm-up. `list<int>`: 10000 nodes × (sizeof(int) + 2 pointers + allocator overhead) — each `++iterator` loads unrelated addresses, ~10000 cold or conflict misses, no spatial reuse. Same O(n) loop, vector/array often **5–20× faster** in practice depending on CPU and allocator. This is why market data, game ticks, and sensor batches use `vector` or fixed `array`, not `list`.
 
 ---
 

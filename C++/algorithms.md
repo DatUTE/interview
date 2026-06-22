@@ -1,5 +1,7 @@
 # Algorithms in C++
 
+> **LeetCode ôn PV (Easy→Medium, theo concept):** [../leetcode_interview_prep.md](../leetcode_interview_prep.md)
+
 ---
 
 ## Complexity Reference
