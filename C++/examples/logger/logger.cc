@@ -36,3 +36,15 @@ const char* Logger::levelToString(LogLevel level)
 
     return "UNKNOWN";
 }
+
+const char* Logger::colorForLevel(LogLevel level)
+{
+    switch (level)
+    {
+        case LogLevel::INFO:    return "\033[32m";
+        case LogLevel::WARNING: return "\033[33m";
+        case LogLevel::ERROR:   return "\033[31m";
+    }
+
+    return "\033[0m";
+}
