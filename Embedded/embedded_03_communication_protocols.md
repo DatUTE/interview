@@ -119,7 +119,31 @@ Typical: 4.7kΩ for 100kHz, 2.2kΩ for 400kHz, 1kΩ for 1MHz.
 
 ## 3.4 CAN Bus
 
-Multi-master, differential bus (CAN_H, CAN_L). Designed for automotive/industrial noise environments.
+Multi-master, differential bus (CAN_H, CAN_L). Designed for automotive/industrial noise environments where many ECUs need deterministic message priority without a central host.
+
+**Physical Layer**
+
+CAN uses differential signaling:
+
+| Bus state  | Logic | CAN_H            | CAN_L            | Differential |
+|------------|-------|------------------|------------------|--------------|
+| Recessive  | 1     | ~2.5 V           | ~2.5 V           | ~0 V         |
+| Dominant   | 0     | ~3.5 V           | ~1.5 V           | ~2 V         |
+
+- **Dominant wins**: if any node drives dominant, the bus reads dominant.
+- **Termination**: 120 ohm resistor at each physical end of the main bus, not at every node.
+- **Topology**: linear bus with short stubs. Long star wiring causes reflections and arbitration errors.
+- **Common mode tolerance**: differential receivers tolerate noise that appears on both wires.
+- **Typical classic CAN bit rates**: 125 kbps, 250 kbps, 500 kbps, 1 Mbps. Higher speed means shorter bus length.
+
+Approximate classic CAN length examples:
+
+| Bit rate | Typical max bus length |
+|----------|------------------------|
+| 1 Mbps   | ~40 m                  |
+| 500 kbps | ~100 m                 |
+| 250 kbps | ~250 m                 |
+| 125 kbps | ~500 m                 |
 
 **Frame Types**
 
@@ -130,6 +154,23 @@ Multi-master, differential bus (CAN_H, CAN_L). Designed for automotive/industria
 | Error    | Broadcast when error detected             |
 | Overload | Request delay between frames              |
 
+**Identifiers and Message Priority**
+
+CAN is message-oriented, not address-oriented. The ID describes the meaning and priority of the message, not the destination node.
+
+- **Standard frame**: 11-bit identifier.
+- **Extended frame**: 29-bit identifier.
+- **Lower numerical ID = higher priority** because arbitration compares bits from MSB to LSB and dominant 0 beats recessive 1.
+- Hardware acceptance filters let a node receive only IDs it cares about, reducing CPU load.
+
+Example:
+
+| ID      | Meaning                     | Priority |
+|---------|-----------------------------|----------|
+| 0x080   | Brake/torque safety message | High     |
+| 0x180   | Motor status                | Medium   |
+| 0x500   | Diagnostic data             | Low      |
+
 **Arbitration (CSMA/CD+AMP)**
 
 All nodes transmit simultaneously. Dominant bit (0) wins over recessive (1). Node that loses arbitration backs off and retries. Lowest ID wins — higher priority.
@@ -139,6 +180,42 @@ Node A transmits ID: 0x100 = 0001 0000 0000b
 Node B transmits ID: 0x0F0 = 0000 1111 0000b
                               ↑ B wins (dominant 0 vs A's recessive)
 ```
+
+Arbitration is non-destructive: the winning frame continues without being corrupted. This is why CAN can provide deterministic priority under load.
+
+**Classic CAN Data Frame Fields**
+
+```
+SOF  Identifier  RTR/IDE/r0  DLC  Data  CRC  ACK  EOF
+ 0   11/29 bits  control     0-8  byte  15b  slot 7 recessive bits
+```
+
+- **SOF**: Start of frame, dominant bit.
+- **Identifier**: message priority and meaning.
+- **RTR**: Remote Transmission Request. Dominant for data frame, recessive for remote frame.
+- **IDE**: distinguishes standard vs extended ID.
+- **DLC**: Data Length Code, 0 to 8 bytes for classic CAN.
+- **CRC**: detects frame corruption.
+- **ACK slot**: transmitter sends recessive; any receiver that got the frame correctly drives dominant.
+- **EOF**: End of frame, fixed recessive bits.
+
+**Bit Stuffing**
+
+After 5 consecutive bits of the same polarity, the transmitter inserts one opposite-polarity stuff bit. Receivers remove it automatically. This guarantees enough edges for clock synchronization. A violation creates a stuff error.
+
+**Bit Timing**
+
+Each bit is divided into time quanta:
+
+```
+Sync Segment | Propagation Segment | Phase Segment 1 | Phase Segment 2
+             ^ resynchronization adjusts sample point here
+```
+
+- **Sample point** is often configured around 75-87.5% of the bit time.
+- **Propagation segment** covers cable delay, transceiver delay, and optocoupler delay if used.
+- **SJW (Synchronization Jump Width)** limits how much the controller may resynchronize on an edge.
+- All nodes on a bus must use compatible nominal bit timing, not just the same nominal bit rate.
 
 **Error Handling**
 
@@ -151,11 +228,81 @@ CAN has sophisticated error confinement:
 
 Each node has TX Error Counter (TEC) and RX Error Counter (REC). At TEC/REC > 127: **Error Passive** mode. At TEC > 255: **Bus Off** (node disconnects until 128×11 recessive bits detected).
 
+Error states:
+
+| State          | Counter condition              | Behavior |
+|----------------|--------------------------------|----------|
+| Error Active   | TEC < 128 and REC < 128        | Can transmit active error flags |
+| Error Passive  | TEC >= 128 or REC >= 128       | Still communicates, but uses passive error flags |
+| Bus Off        | TEC > 255                      | Stops transmitting until recovered by software/controller |
+
+Common real-world causes:
+
+- Missing or extra termination.
+- Too-long stubs or star topology.
+- Bit timing mismatch between nodes.
+- Ground offset or weak transceiver supply.
+- No other node present to ACK frames.
+- CAN_H/CAN_L swapped.
+
+**Bus Load**
+
+CAN is deterministic, but high bus load increases latency for low-priority messages. Keep average bus utilization well below 100%; many automotive designs target <50-70% depending on safety margin.
+
+Rough estimate:
+
+`bus_load = total_frame_bits_per_second / bus_bit_rate`
+
+A classic CAN frame with 8 data bytes often consumes roughly 110-130 bits on the wire after overhead and bit stuffing, so 1000 frames/s at 500 kbps is about 22-26% bus load.
+
 **CAN FD (Flexible Data-rate)**
 
-- Data phase can switch to higher bit rate (up to 8 Mbps)
-- Payload up to 64 bytes (vs 8 bytes classic CAN)
-- Separate bit timing for arbitration and data phase
+CAN FD keeps classic CAN arbitration but improves payload size and throughput.
+
+- **Payload up to 64 bytes** instead of 8 bytes.
+- **Dual bit rate**: arbitration phase uses the normal CAN bit rate; data phase can switch faster.
+- **BRS (Bit Rate Switch)** bit enables the faster data phase.
+- **FDF/EDL bit** marks the frame as CAN FD.
+- **ESI (Error State Indicator)** reports whether the transmitter is error active or error passive.
+- **Improved CRC**: 17-bit CRC for smaller CAN FD payloads, 21-bit CRC for larger payloads.
+- **No remote frames** in CAN FD.
+
+CAN FD frame concept:
+
+```
+Arbitration phase        Data phase at higher speed           Arbitration phase
+SOF + ID + control  -->  payload + CRC at data bit rate  -->  ACK + EOF
+```
+
+Typical setup:
+
+| Phase       | Example bit rate | Purpose |
+|-------------|------------------|---------|
+| Arbitration | 500 kbps         | All nodes arbitrate reliably across full bus length |
+| Data        | 2 Mbps or 5 Mbps | Winner sends larger payload faster |
+
+**Classic CAN vs CAN FD**
+
+| Feature       | Classic CAN          | CAN FD |
+|---------------|----------------------|--------|
+| Max payload   | 8 bytes              | 64 bytes |
+| Bit rate      | One bit rate         | Arbitration + optional faster data phase |
+| CRC           | 15-bit               | 17-bit or 21-bit |
+| Remote frame  | Supported            | Not supported |
+| Compatibility | Classic controllers  | Requires CAN FD-capable controllers |
+
+Important compatibility note: a classic CAN controller that sees a CAN FD frame may treat it as an error. Mixed networks must ensure FD frames are only used where all active nodes tolerate CAN FD, or isolate classic-only nodes.
+
+**When to Use CAN FD**
+
+Use CAN FD when:
+
+- Firmware updates or diagnostics need larger packets.
+- Sensor payloads exceed 8 bytes.
+- You need lower bus load without changing the arbitration behavior.
+- The hardware transceivers, controllers, and tools all support CAN FD.
+
+Classic CAN is still enough when messages are small, timing is well understood, and compatibility with legacy ECUs/tools matters more than throughput.
 
 ---
 
@@ -221,7 +368,19 @@ Host-centric: one host, multiple devices/hubs. Host initiates all transactions.
 
 **Q: Two CAN nodes simultaneously transmit IDs 0x200 and 0x1FF. Which wins and why?**
 
-> **0x1FF wins**. CAN arbitration: both nodes transmit simultaneously, monitoring the bus. At each bit, if a node sends recessive (1) but reads dominant (0) on the bus, it has lost arbitration and stops. 0x200 = `0010 0000 0000b`, 0x1FF = `0001 1111 1111b`. At bit 9 (0-indexed from MSB): 0x200 sends 1 (recessive), 0x1FF sends 1. At bit 10: 0x200 sends 0 (dominant), 0x1FF sends 0. Actually compare bit by bit from MSB: first differing bit is bit 9 where 0x200 = `1` (recessive) and 0x1FF = `0` (dominant) — **0x1FF wins** because it has a dominant (0) where 0x200 has a recessive (1). Lower numerical ID = higher priority.
+> **0x1FF wins**. CAN arbitration compares identifier bits from MSB to LSB while every transmitter monitors the bus. 0x200 = `010 0000 0000b`, 0x1FF = `001 1111 1111b`. The first differing bit is the second bit: 0x200 sends recessive 1, while 0x1FF sends dominant 0. The node sending recessive but reading dominant loses arbitration and retries later. Lower numerical ID = higher priority.
+
+**Q: Why does CAN need termination, and where should the termination resistors be placed?**
+
+> CAN is a high-speed differential bus, so the cable behaves like a transmission line. Without termination, signal edges reflect from cable ends and can create false bits or arbitration errors. Use **120 ohm termination at each physical end of the main bus**. Do not place 120 ohm resistors at every node; that overloads the drivers. Keep stubs short because long branches also create reflections.
+
+**Q: What is the difference between a CAN node address and a CAN identifier?**
+
+> CAN does not use node addresses like many master-slave protocols. The **identifier describes the message**, such as wheel speed, motor torque request, or diagnostic response. Any node may transmit a message ID, and any interested node may receive it through acceptance filters. The ID also defines priority: lower numerical ID wins arbitration.
+
+**Q: What happens if only one CAN node is connected to the bus and it tries to transmit?**
+
+> The transmitter sends the frame, but no other node drives the ACK slot dominant. The transmitter detects an **ACK error**, retries, and its transmit error counter increases. This is a common bench-test issue: even if the wiring is correct, a single-node CAN bus cannot successfully acknowledge its own frames in normal mode.
 
 **Q: Explain SPI CPOL and CPHA. A sensor datasheet says "data captured on rising edge, clock idles low." Which SPI mode?**
 
@@ -242,3 +401,11 @@ Host-centric: one host, multiple devices/hubs. Host initiates all transactions.
 **Q: Your SPI slave requires a minimum 50 ns CS-to-SCLK setup time, but the MCU asserts CS and immediately starts the clock. At 36 MHz, each cycle is ~28 ns. How do you guarantee the timing?**
 
 > Options in order of preference: (1) **Insert a software NOP delay** after asserting CS: at 72 MHz system clock, 4 NOPs ≈ 56 ns ≥ 50 ns. Use `__NOP()` intrinsic — not subject to compiler reordering if `volatile`. (2) **Use GPIO-controlled CS and add a DMA/timer-synchronized delay** — most robust but complex. (3) **Configure SPI NSS pulse management** if the MCU's SPI peripheral supports `NSS pulse` mode (inserts 1 cycle gap between CS and CLK). (4) **Reduce SPI clock to 18 MHz** — halve speed so each cycle is 56 ns, and the CS-to-CLK gap is naturally larger. Document the constraint clearly in the driver code with a comment citing the datasheet page.
+
+**Q: How is CAN FD faster than classic CAN if arbitration still happens at the normal CAN bit rate?**
+
+> CAN FD keeps arbitration at the nominal bit rate so all nodes can safely resolve priority across the full bus. After one node wins arbitration, the frame can switch to a faster **data phase** using the BRS bit. This improves throughput because the payload and CRC dominate large frames. Example: arbitration may run at 500 kbps while the data field runs at 2 Mbps or 5 Mbps.
+
+**Q: Can classic CAN and CAN FD nodes share the same bus?**
+
+> Only with care. Classic CAN controllers generally do not understand CAN FD frames and may flag them as errors. A mixed network is safe only if classic nodes are isolated from FD traffic, are configured as FD-tolerant where supported, or the network uses only classic CAN frames. If active classic-only nodes are on the same bus, do not transmit CAN FD frames.
