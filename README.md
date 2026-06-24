@@ -9,6 +9,7 @@ Tài liệu ôn phỏng vấn kỹ thuật — tập trung **Senior C++ / system
 | File | Mục đích |
 |------|----------|
 | [vsf_senior_cpp_vinsmart_future.md](vsf_senior_cpp_vinsmart_future.md) | Lộ trình & checklist cho **VinSmart Future — Senior C++** |
+| [Axon_interview/](Axon_interview/README.md) | Lộ trình & checklist cho **Axon — Embedded Software Engineer I** |
 
 ---
 
@@ -27,9 +28,9 @@ Hệ thống C++, concurrency, networking, low latency, Linux, system design.
 | low_latency | production_debugging, senior_engineering_behaviors | |
 | segmentation_fault | system_design | |
 
-### [Embedded/](Embedded/embedded_systems.md) — 12 files
+### [Embedded/](Embedded/embedded_systems.md) — 13 files
 
-MCU, RTOS, buses, embedded Linux, safety (ISO 26262). Hữu ích nếu CV có embedded / IoT Vingroup.
+MCU, RTOS, buses, embedded Linux, safety (ISO 26262), C++ embedded security. Hữu ích nếu CV có embedded / IoT Vingroup.
 
 ### [Rust/](Rust/rust_00_index.md) — 12 files
 
@@ -38,6 +39,10 @@ Ownership, async, FFI — khi phỏng vấn có Rust hoặc so sánh memory safe
 ### [OpenGL/](OpenGL/opengl_00_index.md) — 10 files
 
 Graphics pipeline — khi role liên quan rendering / game engine.
+
+### [CS Fundamental/](CS%20Fundamental/README.md) — core CS foundations
+
+Algorithms, OS, networking, databases, distributed systems, computer architecture, security.
 
 ---
 
