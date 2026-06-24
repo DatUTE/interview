@@ -51,8 +51,28 @@ Originated from the "Gang of Four" (GoF) book: *Design Patterns: Elements of Reu
 Ensure a class has **exactly one instance** and provide a global point of access to it.
 
 ### When to Use
-- Shared resource that must be initialized once: logger, config, thread pool, database connection pool
-- When exactly one object is needed to coordinate actions across the system
+- A process-wide service must have exactly one owner: logger, metrics registry, tracing exporter, crash reporter
+- A resource is expensive or order-sensitive to initialize: configuration loader, feature flag registry, hardware/device manager
+- One object coordinates shared state for the whole process: thread pool, scheduler, event loop, global cache manager
+- Access is needed from application wiring or infrastructure code, not from deep business logic
+
+### Practical Use Cases
+
+| Use Case | Why Singleton Can Fit | Caveat |
+|----------|-----------------------|--------|
+| Logger | One output pipeline, shared formatting, synchronized writes | Prefer injecting `ILogger&` into business logic for testability |
+| Configuration registry | Load once, expose read-only settings everywhere | Avoid mutable runtime config hidden behind global access |
+| Metrics/tracing exporter | Central place to publish counters/spans | Keep API non-blocking; do not let telemetry slow hot paths |
+| Thread pool / scheduler | Coordinates shared worker threads | Lifetime and shutdown order must be explicit |
+| Hardware/device manager | Only one process-level owner should control a device | In multi-process systems, OS-level locking may still be required |
+| Plugin/service registry | Central lookup table for registered factories/services | Registration order and static initialization can become fragile |
+
+### When to Avoid
+
+- Do not use Singleton just to avoid passing dependencies.
+- Avoid it for business objects, request/user/session state, or anything that should vary per test.
+- Avoid mutable global state unless there is a clear ownership and synchronization policy.
+- In libraries, prefer dependency injection; the application can decide whether the dependency is singleton-scoped.
 
 ### Implementation (Meyers Singleton — thread-safe in C++11)
 
