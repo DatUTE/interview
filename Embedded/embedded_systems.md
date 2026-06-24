@@ -1,6 +1,6 @@
 # Embedded Systems — Index
 
-Study guide split into 12 focused files, from hardware fundamentals to professional-level safety and security.
+Study guide split into 13 focused files, from hardware fundamentals to professional-level safety and security.
 
 ---
 
@@ -20,6 +20,7 @@ Study guide split into 12 focused files, from hardware fundamentals to professio
 | 10 | [embedded_10_embedded_linux.md](embedded_10_embedded_linux.md) | Boot sequence (ROM BL → SPL → U-Boot → kernel → init), device tree, platform driver skeleton, character devices, top/bottom half IRQ (tasklet/workqueue/threaded IRQ), kernel memory allocation, PREEMPT_RT, RT process scheduling |
 | 11 | [embedded_11_safety_security.md](embedded_11_safety_security.md) | ISO 26262 ASIL A–D, IEC 61508 SIL, MISRA C:2012 key rules, watchdog/CRC/redundancy fault tolerance, secure boot chain, TrustZone (ARMv8-M, TF-M API), common vulnerabilities (debug exposure, overflow, side-channel), RDP levels |
 | 12 | [embedded_12_interview_hot_topics.md](embedded_12_interview_hot_topics.md) | 10 fully worked senior Q&As: priority inversion, `volatile` bugs, lockless SPSC ring buffer, boot sequence, DMA cache bug, hard fault analysis, debounce, mutex vs semaphore, WCET measurement, low-power checklist |
+| 13 | [embedded_13_cpp_embedded_security.md](embedded_13_cpp_embedded_security.md) | C++ embedded security concepts: threat model, secure boot/OTA, parser hardening, memory safety, key management, crypto rules, RTOS/Linux hardening, production lockdown |
 
 ---
 
@@ -43,4 +44,5 @@ Study guide split into 12 focused files, from hardware fundamentals to professio
 **Week 4 — Professional Level**
 10. `embedded_10` — embedded Linux
 11. `embedded_11` — safety and security
-12. `embedded_12` — interview Q&A drill (review daily)
+12. `embedded_13` — C++ embedded security concepts
+13. `embedded_12` — interview Q&A drill (review daily)
