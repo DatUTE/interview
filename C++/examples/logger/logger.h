@@ -33,7 +33,7 @@ public:
     
         std::ostringstream oss;
         oss << "[" << getCurrentTime() << "] ";
-        oss << "[" << levelToString(level) << "] ";
+        oss << "[" << colorForLevel(level) << levelToString(level) << "\033[0m" << "] ";
         oss << "[" << file << ":" << line << "] ";
     
         (oss << ... << std::forward<Args>(args));
@@ -46,6 +46,7 @@ private:
 
     std::string getCurrentTime();
     const char* levelToString(LogLevel level);
+    const char* colorForLevel(LogLevel level);
 
     std::mutex m_mutex;
 };
