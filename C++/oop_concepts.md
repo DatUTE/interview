@@ -1119,6 +1119,87 @@ const_cast<T>(expr)       // add/remove const (use sparingly)
 reinterpret_cast<T>(expr) // bit-level reinterpret (unsafe, rarely needed)
 ```
 
+### Upcasting and Downcasting
+
+In inheritance, casting usually means converting between base and derived types.
+
+```cpp
+class Base {
+public:
+    virtual ~Base() = default;
+    virtual void print() const { std::cout << "Base\n"; }
+};
+
+class Derived : public Base {
+public:
+    void print() const override { std::cout << "Derived\n"; }
+    void onlyDerived() const { std::cout << "Derived only\n"; }
+};
+```
+
+**Upcasting** means converting from derived to base:
+
+```cpp
+Derived d;
+
+Base* b1 = &d;                       // implicit upcast
+Base* b2 = static_cast<Base*>(&d);    // explicit upcast
+
+b1->print();  // calls Derived::print() because print() is virtual
+```
+
+Upcasting is safe because every `Derived` object contains a valid `Base` subobject. It is commonly used for polymorphism: store many derived objects behind a common base interface.
+
+```cpp
+std::vector<std::unique_ptr<Base>> objects;
+objects.push_back(std::make_unique<Derived>());
+```
+
+Important limitation: after upcasting, the static type is `Base*`, so you can only call members visible through `Base`.
+
+```cpp
+Base* b = new Derived();
+b->print();        // ok
+// b->onlyDerived();  // compile error: Base has no onlyDerived()
+```
+
+**Downcasting** means converting from base to derived:
+
+```cpp
+Base* b = new Derived();
+Derived* d = static_cast<Derived*>(b);  // ok only because b really points to Derived
+d->onlyDerived();
+```
+
+Downcasting is risky because not every `Base` object is a `Derived` object.
+
+```cpp
+Base* b = new Base();
+Derived* d = static_cast<Derived*>(b);  // compiles, but wrong
+d->onlyDerived();                       // UB
+```
+
+Use `dynamic_cast` when the runtime type is not guaranteed:
+
+```cpp
+void handle(Base* b) {
+    if (auto* d = dynamic_cast<Derived*>(b)) {
+        d->onlyDerived();   // safe
+    } else {
+        // b is not a Derived
+    }
+}
+```
+
+Summary:
+
+| Cast direction | Meaning | Safety |
+|---|---|---|
+| Upcast: `Derived*` -> `Base*` | Treat derived object as its base interface | Safe, often implicit |
+| Downcast: `Base*` -> `Derived*` | Recover derived-specific interface | Safe only if runtime object is really `Derived` |
+
+Rule of thumb: upcasting is normal polymorphism; downcasting is a design smell unless you have a clear ownership/type guarantee or are working at a boundary where runtime type inspection is necessary.
+
 ### `static_cast` — Compile-Time Cast
 
 ```cpp
@@ -1218,6 +1299,82 @@ const int x = 42;
 int* p = const_cast<int*>(&x);
 *p = 99;   // UB — x was declared const, modification is undefined
 ```
+
+### `reinterpret_cast` — Low-Level Reinterpretation
+
+`reinterpret_cast` tells the compiler to treat the same bits as a different type. It performs almost no safety checking and does not create a valid object of the target type.
+
+Use it only for low-level boundaries such as:
+
+- Converting between pointer types required by C APIs.
+- Converting pointer values to integer types for logging/debugging.
+- Working with memory-mapped hardware registers.
+- Parsing raw bytes, but prefer `std::memcpy`, `std::bit_cast` (C++20), or serialization code when possible.
+
+```cpp
+#include <cstdint>
+#include <iostream>
+
+int x = 42;
+
+// Pointer -> integer: useful for logging/debugging addresses
+std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(&x);
+std::cout << std::hex << addr << '\n';
+
+// Integer -> pointer: only valid if the address really points to a valid int
+int* p = reinterpret_cast<int*>(addr);
+std::cout << *p << '\n';  // ok here because addr came from &x
+```
+
+Dangerous example:
+
+```cpp
+struct Packet {
+    uint16_t id;
+    uint32_t value;
+};
+
+char buffer[sizeof(Packet)]{};
+
+// Dangerous: may violate alignment, object lifetime, and strict aliasing rules
+Packet* pkt = reinterpret_cast<Packet*>(buffer);
+pkt->value = 123;  // can be UB
+```
+
+Prefer this for raw bytes:
+
+```cpp
+Packet pkt{};
+std::memcpy(&pkt, buffer, sizeof(pkt));  // safer for object representation
+```
+
+For bit reinterpretation in C++20:
+
+```cpp
+#include <bit>
+#include <cstdint>
+
+float f = 1.0f;
+uint32_t bits = std::bit_cast<uint32_t>(f);  // same bits, new object
+```
+
+**Key rule**: `reinterpret_cast` changes how a value is viewed; it does not prove alignment, lifetime, aliasing safety, or semantic correctness.
+
+### Which Cast Should You Use?
+
+| Need | Preferred cast |
+|---|---|
+| Numeric conversion, enum conversion, known upcast/downcast | `static_cast` |
+| Safe downcast when runtime type is unknown | `dynamic_cast` |
+| Remove/add const for legacy APIs | `const_cast` |
+| Low-level pointer/integer or unrelated pointer reinterpretation | `reinterpret_cast` |
+
+General guidance:
+
+- Prefer no cast when implicit conversion is clear and safe.
+- Prefer `static_cast` for normal explicit conversions.
+- Prefer virtual functions, visitors, or type-safe variants over repeated `dynamic_cast`.
+- Avoid `reinterpret_cast` unless you are crossing a low-level system boundary and understand alignment, lifetime, and aliasing rules.
 
 ### RTTI — `typeid`
 
