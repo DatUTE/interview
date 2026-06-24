@@ -193,6 +193,166 @@ void write(int key, std::string val) {
 
 ---
 
+## Atomic vs Mutex vs Semaphore — Quick Comparison
+
+These three solve different synchronization problems:
+
+- `std::atomic`: protect **one variable / one small state machine** without blocking.
+- `std::mutex`: protect a **critical section / shared object invariant** with exclusive ownership.
+- `std::counting_semaphore`: control **how many threads may enter** or signal that **N resources/events are available**.
+
+### Summary Table
+
+| Tool | Protects / Controls | Waiting Behavior | Best For | Not Good For |
+|------|---------------------|------------------|----------|--------------|
+| `std::atomic<T>` | One atomic value or lock-free state | Usually no sleep; may spin/retry | Counters, flags, reference counts, SPSC indexes | Protecting multi-field object invariants |
+| `std::mutex` | Exclusive access to a critical section | Blocks/sleeps if locked | Shared containers, complex state, multi-step invariants | Very hot tiny counters, signal/counting use cases |
+| `std::counting_semaphore<N>` | A count of available permits | Blocks until permit available | Resource pools, rate limits, producer-consumer slots/items | Protecting arbitrary shared data by itself |
+
+Rule of thumb:
+
+```text
+Need atomic increment / publish flag?
+  -> atomic
+
+Need to update multiple fields consistently?
+  -> mutex
+
+Need to limit concurrency or count available items?
+  -> semaphore
+```
+
+### `std::atomic` Example — Counter / Flag
+
+```cpp
+#include <atomic>
+
+std::atomic<uint64_t> requests{0};
+
+void on_request() {
+    requests.fetch_add(1, std::memory_order_relaxed);
+}
+```
+
+Use atomic when the operation itself is the synchronization boundary. A relaxed counter is safe because no other data depends on the counter's ordering.
+
+Bad atomic use:
+
+```cpp
+std::atomic<bool> ready{false};
+std::vector<int> data;
+
+// Atomic flag alone does not make vector mutation safe if multiple threads write/read data.
+```
+
+If multiple fields must change together, use a mutex.
+
+### `std::mutex` Example — Protect Object Invariant
+
+```cpp
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
+
+std::mutex mtx;
+std::unordered_map<int, std::string> users;
+
+void update_user(int id, std::string name) {
+    std::lock_guard lock(mtx);
+    users[id] = std::move(name);
+}
+```
+
+The mutex protects the container's internal structure and the invariant that readers/writers see a consistent map.
+
+### `std::counting_semaphore` Example — Limit Concurrency
+
+`std::counting_semaphore` is available in C++20 via `<semaphore>`.
+
+```cpp
+#include <semaphore>
+
+std::counting_semaphore<8> slots{8};  // at most 8 concurrent users
+
+void call_remote_service() {
+    slots.acquire();   // block until one permit is available
+    try {
+        do_rpc();
+    } catch (...) {
+        slots.release();
+        throw;
+    }
+    slots.release();
+}
+```
+
+Better with RAII:
+
+```cpp
+class SemaphorePermit {
+public:
+    explicit SemaphorePermit(std::counting_semaphore<8>& sem) : sem_(sem) {
+        sem_.acquire();
+    }
+
+    ~SemaphorePermit() {
+        sem_.release();
+    }
+
+    SemaphorePermit(const SemaphorePermit&) = delete;
+    SemaphorePermit& operator=(const SemaphorePermit&) = delete;
+
+private:
+    std::counting_semaphore<8>& sem_;
+};
+
+void call_remote_service() {
+    SemaphorePermit permit(slots);
+    do_rpc();
+}
+```
+
+Semaphore by itself does **not** protect shared data. It only manages permits. If threads enter and then mutate shared state, that state may still need a mutex or atomics.
+
+### Semaphore vs Condition Variable
+
+| Aspect | Semaphore | Condition Variable |
+|--------|-----------|--------------------|
+| Stores count? | Yes, permits are remembered | No, notification can be lost without predicate |
+| Needs mutex? | Not for the permit count itself | Yes, protects predicate/state |
+| Typical use | Limit concurrency, count available items | Wait until a condition on shared state becomes true |
+| Example | "Only 8 RPCs at once" | "Queue is not empty" |
+
+Producer-consumer can be implemented with either:
+
+- `mutex + condition_variable`: protects the queue and waits on predicates.
+- `semaphore + mutex`: semaphores count slots/items; mutex still protects the queue.
+
+### Choosing Correctly
+
+| Scenario | Use |
+|----------|-----|
+| Global metrics counter | `std::atomic<uint64_t>` |
+| Stop flag / readiness flag | `std::atomic<bool>` with correct memory order, or `mutex + condition_variable` if blocking |
+| Shared `std::map`, `std::vector`, object graph | `std::mutex` |
+| Multiple readers, rare writers | `std::shared_mutex` |
+| Bounded connection pool | `std::counting_semaphore` + mutex-protected pool |
+| Thread pool task queue | `mutex + condition_variable`, or semaphore for item count plus mutex for queue |
+| Lock-free SPSC ring buffer | `std::atomic<size_t>` indexes |
+
+### Common Mistakes
+
+| Mistake | Why Wrong |
+|---------|-----------|
+| Using `atomic` for one flag while reading non-atomic shared data incorrectly | Atomicity of the flag does not automatically protect the payload |
+| Using `mutex` for a hot statistics counter | Correct but may be slower than relaxed atomic |
+| Using `semaphore` as if it protected a container | Semaphore controls entry/count; container still needs synchronization |
+| Calling `release()` too many times on a semaphore | Permit count becomes wrong, allowing too much concurrency |
+| Forgetting RAII around `acquire()` / `release()` | Exceptions/early returns can leak permits |
+
+---
+
 ## 3. `std::atomic` and Memory Orders
 
 ### `std::atomic<T>` — Lock-Free Shared Variable
@@ -1276,6 +1436,18 @@ if (!q.try_push(item))
 ---
 
 ### `std::atomic` & Memory Model
+
+---
+
+**[Mid]** Compare `std::atomic`, `std::mutex`, and `std::semaphore`. When would you use each?
+
+> `std::atomic` is for one variable or a small lock-free state transition. It gives atomic load/store/read-modify-write operations and optional memory ordering. Use it for counters, flags, reference counts, and SPSC queue indexes. It does not automatically protect a larger object.
+>
+> `std::mutex` protects a critical section. Use it when multiple fields or a container must be updated consistently, such as `std::map`, `std::vector`, cache state, or object invariants. It can block the thread and has risks such as deadlock and priority inversion, but it is simpler and correct for complex shared state.
+>
+> `std::counting_semaphore` controls permits. Use it to limit concurrency or count resources/events, such as "only 8 RPCs at once" or "N items available." It does not by itself protect shared data; a queue or pool usually still needs a mutex.
+>
+> Rule: atomic for a single value, mutex for shared invariants, semaphore for counting/permits.
 
 ---
 
