@@ -23,6 +23,156 @@ OSI (7 layers)              TCP/IP (4 layers)       Examples
 
 ---
 
+## Ethernet / Link Layer Primer
+
+Ethernet is the dominant **Layer 2 / Data Link** technology used in wired LANs. It moves data between devices on the same local network segment using **frames** and **MAC addresses**.
+
+Practical stack view:
+
+```text
+Application
+    |
+Socket API
+    |
+TCP / UDP
+    |
+IP packet
+    |
+Ethernet frame
+    |
+NIC / cable / switch
+```
+
+Important distinction:
+
+> TCP/UDP sockets work with IP addresses and ports. Ethernet works below that with MAC addresses and frames. Normal application code usually does not build Ethernet frames directly; the OS, NIC driver, ARP, and switch handle that layer.
+
+### Ethernet Frame
+
+Simplified Ethernet II frame:
+
+```text
++------------------+------------------+-----------+---------------+----------+
+| Destination MAC  | Source MAC       | EtherType | Payload       | FCS      |
+| 6 bytes          | 6 bytes          | 2 bytes   | 46-1500 bytes | 4 bytes  |
++------------------+------------------+-----------+---------------+----------+
+```
+
+| Field | Meaning |
+|-------|---------|
+| Destination MAC | Receiver's Layer 2 address, or broadcast `ff:ff:ff:ff:ff:ff` |
+| Source MAC | Sender's Layer 2 address |
+| EtherType | Payload protocol, e.g. IPv4 `0x0800`, ARP `0x0806`, IPv6 `0x86DD` |
+| Payload | Usually an IP packet |
+| FCS | Frame check sequence for link-level corruption detection |
+
+On the wire, Ethernet also has preamble/inter-frame gap overhead, but most software-level calculations use the 14-byte Ethernet header plus optional VLAN tag and 4-byte FCS depending on context.
+
+### MAC Address vs IP Address
+
+| Address | Layer | Scope | Example |
+|---------|-------|-------|---------|
+| MAC address | Layer 2 | Local LAN / broadcast domain | `00:1A:2B:3C:4D:5E` |
+| IP address | Layer 3 | Routable across networks | `192.168.1.10` |
+| Port | Layer 4 | Process/service endpoint | TCP `443`, UDP `53` |
+
+When a host sends to another IP on the same LAN:
+
+```text
+App sends to 192.168.1.20:443
+  -> kernel chooses route/interface
+  -> ARP resolves 192.168.1.20 to destination MAC
+  -> NIC sends Ethernet frame to that MAC
+```
+
+When sending outside the LAN, the destination Ethernet MAC is the **default gateway's MAC**, not the final server's MAC. The IP destination remains the final remote IP.
+
+### ARP
+
+ARP maps IPv4 addresses to MAC addresses inside a local network.
+
+```text
+Who has 192.168.1.20? Tell 192.168.1.10
+192.168.1.20 is at aa:bb:cc:dd:ee:ff
+```
+
+Notes:
+
+- ARP is broadcast-based.
+- ARP results are cached by the OS.
+- ARP spoofing can enable man-in-the-middle attacks on a LAN.
+- IPv6 uses Neighbor Discovery Protocol instead of ARP.
+
+### Switches, Broadcast, and VLAN
+
+An Ethernet switch learns which MAC address is reachable on which port.
+
+Behavior:
+
+- Known unicast: forward only to the learned port.
+- Unknown unicast: flood until learned.
+- Broadcast: send to all ports in the VLAN.
+- VLAN tag `802.1Q`: separates Layer 2 broadcast domains on shared infrastructure.
+
+Interview angle:
+
+> A switch forwards based on MAC addresses. A router forwards based on IP addresses. A VLAN splits one physical switch fabric into multiple logical Layer 2 networks.
+
+### MTU, MSS, and Fragmentation
+
+Typical Ethernet MTU is **1500 bytes**. That MTU is the maximum Layer 3 payload carried by one Ethernet frame, usually an IP packet.
+
+For IPv4 without options:
+
+```text
+Ethernet MTU = 1500
+TCP MSS      = 1500 - IPv4(20) - TCP(20) = 1460
+UDP payload  = 1500 - IPv4(20) - UDP(8)  = 1472
+```
+
+Why this matters:
+
+- Sending larger IP packets may trigger fragmentation or packet drops.
+- TCP discovers/negotiates MSS to avoid fragmentation.
+- UDP applications should keep datagrams below path MTU; real-time protocols often stay around 1200 bytes to be safer across tunnels/VPNs/IPv6.
+
+### NIC and Offloads
+
+Modern NICs can offload some packet work from the CPU:
+
+- Checksum offload.
+- TSO/GSO: segment large TCP buffers into packets.
+- LRO/GRO: coalesce received packets.
+- RSS: distribute packet processing across CPU cores.
+
+Production caveat:
+
+> Packet captures may look surprising when offloads are enabled because the OS capture point can observe packets before the NIC has segmented or checksummed them.
+
+### C++ / Systems Relevance
+
+Most C++ network services use sockets and do not touch Ethernet directly. Ethernet still matters for:
+
+- MTU/MSS sizing.
+- Packet loss, drops, and NIC queue behavior.
+- Low-latency tuning.
+- Multicast/broadcast systems.
+- Packet capture and troubleshooting.
+- Raw sockets, DPDK, AF_PACKET, or custom packet processing.
+
+Useful commands:
+
+```bash
+ip link show eth0                 # interface state, MAC, MTU
+ip neigh                          # ARP/neighbor cache
+ethtool eth0                      # speed, duplex, link detected
+ethtool -k eth0                   # offload features
+tcpdump -i eth0 -e arp            # show Ethernet header + ARP traffic
+tcpdump -i eth0 -e host 10.0.0.5  # include MAC addresses in capture
+```
+
+---
+
 ## 1. TCP vs UDP — So sánh chi tiết
 
 ### Bảng tóm tắt
@@ -947,6 +1097,12 @@ ethtool eth0             # interface capabilities
 **Q [Mid]: Tại sao MSS TCP ~1460 bytes mà UDP payload có thể ~1472?**
 
 > Ethernet MTU 1500: trừ IPv4 header 20B. TCP thêm header tối thiểu 20B → MSS ≈ 1460. UDP header chỉ 8B → 1500−20−8 = 1472. UDP gửi lớn hơn → IP fragmentation — một fragment mất thì cả datagram mất, nên real-time thường giữ UDP < 1200B safe.
+
+---
+
+**Q [Mid]: Ethernet khác gì so với IP/TCP?**
+
+> **Ethernet** là Layer 2: truyền frame trong cùng LAN bằng **MAC address**. **IP** là Layer 3: định tuyến packet giữa các network bằng IP address. **TCP/UDP** là Layer 4: multiplex traffic tới process/service bằng port. App C++ thường gọi socket với IP+port; kernel sẽ route, dùng ARP/neighbor discovery để tìm MAC next-hop, rồi NIC gửi Ethernet frame. Nếu remote host ngoài LAN, Ethernet destination MAC là MAC của default gateway, không phải MAC của remote server.
 
 ---
 
