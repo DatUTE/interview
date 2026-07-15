@@ -96,12 +96,43 @@ FIELD_SET(reg, 5, 3, 0b101);  // reg = 0x00000028
 
 | Section   | Contents                               | Location (typical)       |
 |-----------|----------------------------------------|--------------------------|
-| `.text`   | Code, `const` strings, `const` globals | Flash                   |
-| `.rodata` | Read-only data                         | Flash                    |
+| `.text`   | Machine code, ISR vectors              | Flash                    |
+| `.rodata` | `const` globals, string literals, lookup tables | Flash           |
 | `.data`   | Initialized globals/statics            | Flash (LMA) → RAM (VMA) |
 | `.bss`    | Zero-initialized globals/statics       | RAM (zero-filled at startup) |
 | `.stack`  | Call stack                             | RAM (top)                |
 | `.heap`   | Dynamic allocation                     | RAM (above .bss)         |
+
+**Why `const` strings and `const` globals are in `.rodata`, not `.text`**
+
+The compiler puts **executable instructions** in `.text` and **read-only data** in `.rodata`. They are different ELF input sections:
+
+```c
+const char msg[] = "hello";   // → .rodata
+const int table[] = {1, 2, 3}; // → .rodata
+
+void foo(void) {
+    puts("hello");            // string literal "hello" → .rodata
+}
+// foo()'s machine code      → .text
+```
+
+So strictly speaking, `const` strings and `const` globals belong in **`.rodata`**, not `.text`.
+
+Why the confusion?
+
+1. **Linker scripts often merge them into one Flash output section.** The output section may be *named* `.text`, but the linker still pulls in `*(.rodata*)` alongside `*(.text*)`. Both end up in Flash — only the section *name* in the script is `.text`.
+2. **People say "text region" loosely** to mean "everything read-only in Flash" (code + constants), even though ELF distinguishes `.text` vs `.rodata`.
+3. **Small constants may be embedded in instructions** as immediate operands (part of the code stream), but that is not the same as placing a global/string object in the `.text` data section.
+
+```bash
+# Verify with the toolchain
+arm-none-eabi-gcc -c -o main.o main.c
+arm-none-eabi-objdump -h main.o    # shows separate .text and .rodata
+arm-none-eabi-nm main.o            # 't' = .text, 'r' = .rodata
+```
+
+**C++ note:** `constexpr` data may be emitted as immediates (no storage) or in `.rodata` if it needs an address. Objects with static constructors usually live in `.data`/`.bss` plus init routines in `.init_array`, not in `.rodata`.
 
 **Linker Script Skeleton**
 
@@ -226,12 +257,16 @@ class RingBuffer {
 public:
     bool push(const T& v) {
         if (count_ == N) return false;
-        buf_[head_] = v; head_ = (head_ + 1) % N; ++count_;
+        buf_[tail_] = v;
+        tail_ = (tail_ + 1) % N;
+        ++count_;
         return true;
     }
     bool pop(T& v) {
         if (count_ == 0) return false;
-        v = buf_[tail_]; tail_ = (tail_ + 1) % N; --count_;
+        v = buf_[head_];
+        head_ = (head_ + 1) % N;
+        --count_;
         return true;
     }
     size_t size() const { return count_; }
@@ -560,7 +595,7 @@ void uart_task(void *pv) {
 
 **Q: What are the `.text`, `.data`, and `.bss` sections? Where does each live in memory?**
 
-> `.text`: compiled code and read-only constants — lives in Flash. `.data`: initialized global/static variables (e.g., `int x = 5;`) — lives in Flash at load time (LMA), copied to RAM at startup (VMA). `.bss`: zero-initialized globals/statics (e.g., `int x;` at file scope) — lives only in RAM; the startup code zeroes this region (nothing stored in Flash). The linker script defines these sections and the startup code performs the copy/zero.
+> `.text`: compiled **machine code** — lives in Flash. `.rodata`: **read-only data** — `const` globals, string literals, lookup tables — also lives in Flash. Linker scripts often merge `*(.text*)` and `*(.rodata*)` into one Flash output section, which causes beginners to think constants are "in `.text`", but the compiler emits them as separate `.rodata` input sections. `.data`: initialized global/static variables (e.g., `int x = 5;`) — stored in Flash at load time (LMA), copied to RAM at startup (VMA). `.bss`: zero-initialized globals/statics — lives only in RAM; startup code zeroes this region. The linker script defines these sections and the startup code performs the copy/zero.
 
 ---
 
