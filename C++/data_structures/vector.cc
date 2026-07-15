@@ -8,8 +8,7 @@ class Vector
 public:
     Vector() = default;
 
-    Vector(const Vector& other)
-    {
+    Vector(const Vector& other) {
         reserve(other.m_size);
         for (std::size_t i = 0; i < other.m_size; ++i)
         {
@@ -17,8 +16,7 @@ public:
         }
     }
 
-    Vector& operator=(const Vector& other)
-    {
+    Vector& operator=(const Vector& other) {
         if (this == &other)
         {
             return *this;
@@ -29,13 +27,11 @@ public:
         return *this;
     }
 
-    Vector(Vector&& other) noexcept
-    {
+    Vector(Vector&& other) noexcept {
         swap(other);
     }
 
-    Vector& operator=(Vector&& other) noexcept
-    {
+    Vector& operator=(Vector&& other) noexcept {
         if (this != &other)
         {
             delete[] m_data;
@@ -48,25 +44,27 @@ public:
         return *this;
     }
 
-    ~Vector()
-    {
+    ~Vector() noexcept {
         delete[] m_data;
     }
 
-    void push_back(const T& value)
-    {
-        ensureCapacityForOneMore();
+    void push_back(const T& value) {
+        if (m_size == m_capacity)
+        {
+            reserve(m_capacity == 0 ? 1 : m_capacity * 2);
+        }
         m_data[m_size++] = value;
     }
 
-    void push_back(T&& value)
-    {
-        ensureCapacityForOneMore();
+    void push_back(T&& value) {
+        if (m_size == m_capacity)
+        {
+            reserve(m_capacity == 0 ? 1 : m_capacity * 2);
+        }
         m_data[m_size++] = std::move(value);
     }
 
-    void pop_back()
-    {
+    void pop_back() {
         if (empty())
         {
             throw std::out_of_range("Vector is empty");
@@ -75,8 +73,16 @@ public:
         --m_size;
     }
 
-    T& operator[](std::size_t index)
-    {
+    void back() {
+        if (empty())
+        {
+            throw std::out_of_range("Vector is empty");
+        }
+
+        return m_data[m_size - 1];
+    }
+
+    T& operator[](std::size_t index) {
         if (index >= m_size)
         {
             throw std::out_of_range("Vector index out of range");
@@ -85,8 +91,7 @@ public:
         return m_data[index];
     }
 
-    const T& operator[](std::size_t index) const
-    {
+    const T& operator[](std::size_t index) const {
         if (index >= m_size)
         {
             throw std::out_of_range("Vector index out of range");
@@ -95,8 +100,7 @@ public:
         return m_data[index];
     }
 
-    void reserve(std::size_t newCapacity)
-    {
+    void reserve(std::size_t newCapacity) {
         if (newCapacity <= m_capacity)
         {
             return;
@@ -113,29 +117,19 @@ public:
         m_capacity = newCapacity;
     }
 
-    bool empty() const
-    {
+    bool empty() const {
         return m_size == 0;
     }
 
-    std::size_t size() const
-    {
+    std::size_t size() const {
         return m_size;
     }
 
-    std::size_t capacity() const
-    {
+    std::size_t capacity() const {
         return m_capacity;
     }
 
 private:
-    void ensureCapacityForOneMore()
-    {
-        if (m_size == m_capacity)
-        {
-            reserve(m_capacity == 0 ? 1 : m_capacity * 2);
-        }
-    }
 
     void swap(Vector& other) noexcept
     {

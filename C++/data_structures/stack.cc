@@ -20,7 +20,10 @@ public:
 
     void push(const T& value)
     {
-        m_top = new Node{value, m_top};
+        Node* newNode = new Node;
+        newNode->value = value;
+        newNode->next = m_top; // trỏ tới đỉnh cũ
+        m_top = newNode; // đỉnh mới là node vừa tạo
         ++m_size;
     }
 
