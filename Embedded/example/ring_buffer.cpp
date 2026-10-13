@@ -13,8 +13,8 @@ public:
             return false;
         }
 
-        buffer_[head_] = value;
-        head_ = next(head_);
+        buffer_[tail_] = value;
+        tail_ = next(tail_);
         ++size_;
         return true;
     }
@@ -24,8 +24,8 @@ public:
             return false;
         }
 
-        out = buffer_[tail_];
-        tail_ = next(tail_);
+        out = buffer_[head_];
+        head_ = next(head_);
         --size_;
         return true;
     }

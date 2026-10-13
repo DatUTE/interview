@@ -40,6 +40,10 @@ Ownership, async, FFI — khi phỏng vấn có Rust hoặc so sánh memory safe
 
 Graphics pipeline — khi role liên quan rendering / game engine.
 
+### [Browser/](Browser/README.md) — Chromium internals (3 files)
+
+Browser process, renderer process, Blink — process model, navigation, sandbox, Mojo, rendering pipeline. Cho role **browser engineer** (Chromium-based).
+
 ### [CS Fundamental/](CS%20Fundamental/README.md) — core CS foundations
 
 Algorithms, OS, networking, databases, distributed systems, computer architecture, security.

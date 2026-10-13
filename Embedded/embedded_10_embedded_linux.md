@@ -45,7 +45,232 @@ uart0: serial@40010000 {
 
 ---
 
-## 10.2 Linux Device Drivers
+## 10.2 Linux Kernel — What It Manages
+
+After boot, the kernel is the core layer between hardware and userspace. It provides abstractions and policies so applications do not touch hardware directly.
+
+```text
+Userspace (apps, shell, systemd, your C/C++ program)
+        │  syscalls: open, read, write, fork, mmap, socket, ...
+        ▼
+Linux Kernel
+  ├── Process / Thread management
+  ├── Virtual Memory (MMU, paging)
+  ├── Virtual File System (VFS) + concrete filesystems
+  ├── Scheduler (which runnable task runs next)
+  ├── Network stack (sockets, TCP/UDP/IP)
+  └── Device drivers, IRQ, DMA, timers, ...
+        ▼
+Hardware (CPU, RAM, flash, Ethernet, UART, GPIO, ...)
+```
+
+### Process
+
+A **process** is a running program instance with its own resources:
+
+- Virtual address space
+- File descriptors (open files, sockets, pipes)
+- Process ID (PID), parent PID (PPID)
+- User/group IDs, credentials
+- Signal disposition
+
+Key syscalls:
+
+| Syscall   | Purpose |
+|-----------|---------|
+| `fork()`  | Create a child process (copy-on-write address space) |
+| `execve()`| Replace current process image with a new program |
+| `exit()`  | Terminate process |
+| `wait()`  | Parent waits for child exit status |
+
+On embedded Linux, typical processes include **PID 1** (`systemd` or `BusyBox init`), network daemons, sensor/control apps, and shell scripts started at boot.
+
+```bash
+ps aux          # list processes
+cat /proc/<pid>/status   # process details
+cat /proc/<pid>/maps     # virtual memory map
+```
+
+### Thread
+
+A **thread** is a unit of execution **inside** a process. Threads in the same process **share**:
+
+- Virtual address space
+- File descriptors
+- Signal handlers (with caveats)
+
+Each thread has its own:
+
+- Stack
+- Register context
+- Thread ID (TID)
+
+```text
+Process
+  ├── Thread 1 (main)
+  ├── Thread 2 (sensor reader)
+  └── Thread 3 (network sender)
+       └── share heap, globals, open files
+```
+
+Userspace threads are usually created with **pthread** (`pthread_create`). The kernel sees them as tasks sharing one address space.
+
+Kernel threads (**kthreads**) are kernel-side threads — e.g., workqueue workers, `ksoftirqd`, driver threads. They run in kernel space, not userspace.
+
+**Process vs thread (interview one-liner):**
+
+- **Process**: separate memory space; heavier to create.
+- **Thread**: shared memory space; lighter for parallel work inside one app.
+
+### Virtual Memory
+
+The kernel gives each process its **own virtual address space**. The **MMU** maps virtual addresses to physical RAM (or swap, if configured — uncommon on small embedded targets).
+
+```text
+Virtual address (process view)  --MMU-->  Physical RAM / device memory
+0x00000000 - 0xFFFFFFFF              page tables, TLB
+```
+
+Important concepts:
+
+| Concept | Meaning |
+|---------|---------|
+| Page | Fixed-size chunk of memory (often 4 KB on ARM) |
+| Page table | Kernel data structure mapping virtual → physical |
+| Page fault | Access to unmapped or not-yet-present page; kernel loads or allocates |
+| `mmap()` | Map file or anonymous memory into address space |
+| Heap | Grows via `brk()`/`sbrk()` or `mmap()` |
+
+Typical process layout:
+
+```text
+high address
+  stack        (grows down)
+  ...
+  mmap regions (shared libs, mmapped files)
+  heap         (grows up)
+  BSS / data / text (program code and globals)
+low address
+```
+
+Embedded notes:
+
+- RAM is limited — watch **RSS** (resident set size) and avoid memory leaks in long-running daemons.
+- **OOM killer** terminates processes when the system runs out of memory.
+- **DMA buffers** may need physically contiguous or cache-coherent memory — userspace `malloc` is not always suitable; drivers use `dma_alloc_coherent()` or `dma_map_single()`.
+- Read-only rootfs (SquashFS) saves RAM; writable data goes to `/tmp`, overlay, or UBIFS partition.
+
+### File System
+
+The **VFS (Virtual File System)** provides a uniform interface (`open`, `read`, `write`, `ioctl`) over many backend filesystems.
+
+```text
+App: open("/etc/config", O_RDONLY)
+  → VFS
+    → ext4 / squashfs / ubifs / ...
+      → block device driver (eMMC, NAND, NOR)
+```
+
+Common filesystems on embedded Linux:
+
+| Filesystem | Typical use |
+|------------|-------------|
+| **SquashFS** | Compressed read-only rootfs |
+| **ext4** | Read/write on eMMC/SD |
+| **UBIFS** | Raw NAND with wear leveling |
+| **JFFS2** | Older NOR/NAND |
+| **tmpfs** | RAM-backed `/tmp`, `/run` |
+| **procfs** | `/proc` — process and kernel info |
+| **sysfs** | `/sys` — devices, drivers, tunables |
+| **devtmpfs** | `/dev` — device nodes |
+
+Key objects:
+
+- **inode**: metadata for a file (size, permissions, timestamps).
+- **dentry**: directory entry cache (name → inode).
+- **mount point**: attaches a filesystem at a path (e.g., `/` or `/data`).
+
+Embedded pattern: **read-only root** + **writable `/data` partition** for logs, config, and firmware updates.
+
+### Scheduler
+
+The **scheduler** decides which runnable task (process or thread) runs on which CPU core and for how long.
+
+Common scheduling policies:
+
+| Policy | Use |
+|--------|-----|
+| `SCHED_OTHER` (CFS) | Normal time-shared tasks — default for most apps |
+| `SCHED_FIFO` | Real-time, fixed priority, runs until it blocks or is preempted by higher RT priority |
+| `SCHED_RR` | Real-time with time quantum |
+| `SCHED_IDLE` | Lowest priority, only when CPU is idle |
+
+Core ideas:
+
+- **Context switch**: save registers/stack of outgoing task, restore incoming task.
+- **Preemption**: higher-priority or time-sliced task can interrupt lower-priority running task (depends on config and policy).
+- **Runqueue**: per-CPU queue of runnable tasks.
+
+Embedded relevance:
+
+- Control loops or media pipelines may need **RT priorities** (`sched_setscheduler`, `chrt`).
+- Pin critical threads to dedicated cores: `taskset`, kernel cmdline `isolcpus=`.
+- Long non-preemptible kernel sections or IRQ storms cause **latency jitter** — see PREEMPT_RT (Section 10.4).
+
+```bash
+chrt -f 80 ./control_loop    # SCHED_FIFO priority 80
+taskset -c 2 ./sensor_app     # pin to CPU 2
+```
+
+### Network Stack
+
+The kernel **network stack** implements protocols and exposes the **socket API** to userspace.
+
+```text
+App: socket() → connect()/send()/recv()
+  → TCP / UDP / IP
+    → routing, netfilter (optional)
+      → netdev (e.g., eth0)
+        → Ethernet MAC/driver
+```
+
+Layers (simplified):
+
+| Layer | Examples |
+|-------|----------|
+| Application | HTTP client, MQTT, custom TCP server |
+| Socket API | `socket`, `bind`, `listen`, `accept`, `send`, `recv` |
+| Transport | TCP, UDP |
+| Network | IPv4, IPv6, ICMP, routing table |
+| Link | Ethernet, Wi-Fi, CAN (via **SocketCAN**) |
+
+Embedded notes:
+
+- Static IP or DHCP via `systemd-networkd`, `udhcpc`, or `/etc/network/interfaces`.
+- Firewall: `iptables` / `nftables` (if enabled in kernel config).
+- **SocketCAN** exposes CAN as `can0` — apps use `socket(PF_CAN, ...)` instead of raw register access.
+- Debug: `ip addr`, `ip route`, `ss -tulpn`, `tcpdump`, `ping`.
+
+```bash
+ip link show
+ip addr add 192.168.1.10/24 dev eth0
+ping 192.168.1.1
+```
+
+### How They Work Together (Example)
+
+A sensor gateway app on embedded Linux:
+
+1. **Process** starts via `systemd` unit at boot.
+2. App creates **threads** — one reads I2C sensor, one sends TCP data.
+3. **Virtual memory** holds code, heap buffers, and `mmap` of config file.
+4. Config is read through the **VFS** from `/etc/sensor.conf` on UBIFS.
+5. **Scheduler** runs RT reader thread at higher priority than logger thread.
+6. **Network stack** sends JSON over TCP socket to a cloud server.
+
+---
+
+## 10.3 Linux Device Drivers
 
 **Driver Model**
 
@@ -144,7 +369,7 @@ devm_request_threaded_irq(&pdev->dev, irq,
 
 ---
 
-## 10.3 PREEMPT_RT Linux
+## 10.4 PREEMPT_RT Linux
 
 Standard Linux is not hard real-time. `PREEMPT_RT` patch makes it nearly so:
 - Converts spinlocks to sleeping locks (mutex)
@@ -182,6 +407,10 @@ Dedicate CPU cores for RT tasks (via `isolcpus=2,3` kernel cmdline + `taskset`).
 
 ### Easy
 
+**Q: What are the main things the Linux kernel manages?**
+
+> The kernel manages **processes and threads** (lifecycle, scheduling, signals), **virtual memory** (MMU page tables, `mmap`, page faults), the **file system** (VFS over ext4/SquashFS/UBIFS/proc/sysfs), the **scheduler** (which task runs on which CPU, CFS vs RT policies), and the **network stack** (sockets, TCP/UDP/IP, netdev drivers). It also handles device drivers, interrupts, and timers. Userspace talks to all of these through **system calls**.
+
 **Q: What is a device tree and why is it used in embedded Linux?**
 
 > A device tree (DT) is a data structure that describes hardware to the kernel — base addresses, IRQ numbers, clock sources, pin assignments — in a hardware-independent text format (DTS), compiled to a binary blob (DTB). It decouples hardware description from kernel code: the same kernel binary can run on different boards by loading a different DTB. Before DT, board-specific code was hardcoded in the kernel (arch/arm/mach-*), making the kernel difficult to maintain across hundreds of boards.
@@ -197,6 +426,14 @@ Dedicate CPU cores for RT tasks (via `isolcpus=2,3` kernel cmdline + `taskset`).
 ---
 
 ### Mid
+
+**Q: What is the difference between a process and a thread in Linux?**
+
+> A **process** is an independent program instance with its own virtual address space, file descriptors, and PID. A **thread** is an execution unit inside a process — threads share the same address space and file descriptors but have separate stacks and TIDs. `fork()` creates a new process; `pthread_create()` creates a thread within the current process. For embedded apps, use threads when tasks share data and need concurrent I/O; use separate processes for isolation (crash in one does not kill the other).
+
+**Q: Explain virtual memory on embedded Linux. Why does each process think it has its own memory?**
+
+> The **MMU** maps each process's virtual addresses to physical RAM using **page tables**. This gives isolation (one process cannot read another's memory) and a uniform address layout (code, heap, stack, mmap regions). On access to an unmapped page, a **page fault** triggers the kernel to allocate or load the page. Embedded systems often have no swap — when RAM is exhausted, the **OOM killer** terminates a process. DMA and driver code must respect cache coherency and physical contiguity, which userspace `malloc` does not guarantee.
 
 **Q: What is the difference between a tasklet, workqueue, and threaded IRQ in Linux? When would you use each?**
 

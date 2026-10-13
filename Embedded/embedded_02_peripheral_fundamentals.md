@@ -181,6 +181,84 @@ void TIM2_IRQHandler(void) {
 
 ## 2.4 ADC / DAC
 
+ADC converts an analog voltage into a digital number. DAC converts a digital number into an analog voltage.
+
+```text
+Sensor voltage ──> ADC ──> MCU software
+MCU software  ──> DAC ──> analog voltage/current output
+```
+
+**ADC Applications**
+
+ADC is used when the MCU needs to measure a real-world analog signal.
+
+Common examples:
+
+- **Sensor measurement**: temperature sensor, pressure sensor, light sensor, gas sensor, potentiometer.
+- **Battery monitoring**: read battery voltage through a resistor divider.
+- **Current sensing**: measure shunt resistor or current-sense amplifier output for motor/load protection.
+- **Audio input**: sample microphone or line-in signal.
+- **Motor control feedback**: read phase current, DC bus voltage, throttle position, or analog Hall sensor.
+- **Touch/keypad input**: detect multiple buttons using one ADC channel and different resistor values.
+- **Diagnostics**: monitor supply rails, board temperature, analog fault pins, or external sensor health.
+
+Example: battery voltage divider.
+
+```text
+Battery ── R1 ─┬── ADC_IN
+               |
+              R2
+               |
+              GND
+
+Vadc = Vbattery * R2 / (R1 + R2)
+```
+
+If `R1 = 100k`, `R2 = 33k`, and ADC reads `1.0V`:
+
+```text
+Vbattery = Vadc * (R1 + R2) / R2
+         = 1.0 * 133k / 33k
+         ≈ 4.03V
+```
+
+**DAC Applications**
+
+DAC is used when the MCU needs to generate an analog output.
+
+Common examples:
+
+- **Audio output**: generate simple tones, voice prompts, or waveform playback.
+- **Analog reference generation**: provide adjustable reference voltage for comparator, sensor front-end, or external circuit.
+- **Waveform generation**: sine, triangle, ramp, or test signal generation.
+- **Control voltage output**: drive analog-controlled power supplies, amplifiers, or industrial modules.
+- **Sensor simulation**: emulate analog sensor output during testing.
+- **Calibration output**: generate known voltage levels for production test or self-test.
+- **Bias/offset control**: tune analog front-end offset or threshold.
+
+Example: DAC code to voltage.
+
+```c
+float dac_code_to_voltage(uint16_t code, float vref, uint8_t bits) {
+    return (float)code * vref / ((1 << bits) - 1);
+}
+// 12-bit DAC, code=2048, vref=3.3V -> about 1.65V
+```
+
+In many MCUs, DAC output cannot drive heavy loads directly. It may need an op-amp buffer if the external circuit needs low output impedance or higher current.
+
+**ADC vs DAC Quick Comparison**
+
+| Peripheral | Direction | Typical Question | Example |
+|------------|-----------|------------------|---------|
+| ADC | Analog → Digital | "What voltage/current/temperature is this?" | Read battery voltage |
+| DAC | Digital → Analog | "What voltage/waveform should I output?" | Generate 1.65V reference |
+
+Practical rule:
+
+- Use **ADC** for measurement and feedback.
+- Use **DAC** for analog generation, calibration, references, and simulation.
+
 **ADC Key Concepts**
 
 - **Resolution**: number of bits (8/10/12/16). 12-bit → 4096 levels

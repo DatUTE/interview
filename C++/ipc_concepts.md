@@ -1,6 +1,6 @@
 # Inter-Process Communication (IPC)
 
-**Mục lục:** pipes · shared memory · sockets · **§8 Protobuf** · mmap · **§10 Intermediate (gRPC, Boost message_queue, MQTT)** · decision guide
+**Mục lục:** pipes · message pipe (Chromium/Mojo) · shared memory · sockets · **§8 Protobuf** · mmap · **§10 Intermediate (gRPC, Boost message_queue, MQTT)** · decision guide
 
 **Mobile (C++ core ↔ Android/iOS):** [cpp_core_mobile_bridge_idl.md](cpp_core_mobile_bridge_idl.md) · [examples/mobile_bridge/](examples/mobile_bridge/)
 
@@ -41,6 +41,7 @@ Unlike threads (which share the same address space), **processes have isolated m
 | **Socket (TCP/UDP)**     | Bidirectional  | Medium  | No                  | **Yes**        |
 | **Memory-mapped File**   | Bidirectional  | Fastest | Yes (file-backed)   | No             |
 | **Protobuf + transport** | Bidirectional  | Medium  | No                  | Yes (with TCP) |
+| **Mojo Message Pipe**    | Bidirectional  | Fast    | No                  | No             |
 | **gRPC**                 | Bidirectional  | Medium  | No                  | **Yes**        |
 | **Boost `message_queue`** | Bidirectional | Medium  | Yes (until removed) | No             |
 | **MQTT**                 | Pub/sub        | Medium  | Broker-dependent    | **Yes**        |
@@ -48,6 +49,56 @@ Unlike threads (which share the same address space), **processes have isolated m
 
 > **Transport** (pipe, UDS, TCP) carries **bytes**; **Protobuf** defines how to encode/decode structured messages — see §8.  
 > **Intermediate middleware:** gRPC, Boost.Interprocess, MQTT — see §10.
+
+### Chromium Note: Message Pipe vs OS Pipe
+
+Trong Chromium, **message pipe** thường nhắc tới **Mojo message pipe**, không phải POSIX `pipe()`.
+
+Mental model:
+
+```text
+Renderer Process                         Browser / Service Process
+┌──────────────────────┐                 ┌─────────────────────────┐
+│ mojo::Remote<T>      │                 │ mojo::Receiver<T>       │
+│ client-side endpoint │                 │ server-side endpoint    │
+└──────────┬───────────┘                 └───────────▲─────────────┘
+           │       typed Mojo messages                │
+           └────────────── message pipe ──────────────┘
+```
+
+Key points:
+
+- **POSIX pipe** is an OS byte stream: `read()` / `write()`, no typed interface, no message schema.
+- **Mojo message pipe** is a Chromium IPC abstraction: it carries structured messages generated from `.mojom` interfaces.
+- A Mojo pipe has two endpoints. One side often owns a `mojo::Remote<T>`, the other binds a `mojo::Receiver<T>`.
+- Mojo messages may carry handles: data pipes, shared memory regions, platform file descriptors, or other message pipe endpoints.
+- Under the hood, Chromium implements Mojo over platform IPC primitives such as Unix domain sockets, named pipes, Mach ports, shared memory, and brokered handles depending on OS.
+
+Example in Chromium terms:
+
+```text
+Renderer wants network load
+  |
+  v
+mojo::Remote<network::mojom::URLLoaderFactory>
+  |
+  v
+Mojo message pipe
+  |
+  v
+Network Service Receiver
+  |
+  v
+CreateLoaderAndStart(...)
+```
+
+Interview answer:
+
+> A Mojo message pipe is a bidirectional IPC channel with two endpoints. It is
+> not just a POSIX pipe; Mojo layers typed `.mojom` interfaces, handle passing
+> and capability-style endpoints on top of lower-level OS IPC primitives. In
+> Chromium, renderer code usually calls a `Remote`, and browser/service code
+> receives the call through a `Receiver`.
 
 ---
 
@@ -1525,6 +1576,16 @@ Shared Memory  mmap  Pipe  UDS  Message Queue  TCP loopback
 > - **File descriptors**: privileged FDs (camera, microphone) are opened in the browser process and passed to the renderer via UDS fd-passing
 >
 > **Capability model**: the renderer can only do what the browser process explicitly allows via IPC — no direct syscalls to dangerous APIs. This is enforced by the OS sandbox (seccomp on Linux, sandbox on Windows/macOS).
+
+---
+
+**[Mid/Senior]** Trong Chromium, "message pipe" khác gì POSIX pipe?
+
+> POSIX pipe là OS primitive: một byte stream unidirectional, dùng `read()` / `write()`, không có schema hay interface type. Nếu cần bidirectional thì thường phải dùng hai pipe hoặc Unix domain socket.
+>
+> Chromium **Mojo message pipe** là abstraction IPC cao hơn: một pipe có hai endpoint, gửi **message có cấu trúc** theo interface `.mojom`. Client side thường dùng `mojo::Remote<T>`, server side bind `mojo::Receiver<T>`. Mojo message pipe cũng có thể truyền handles như data pipe, shared memory, platform FD hoặc endpoint của pipe khác.
+>
+> Vì vậy khi nói "Renderer → Remote → Message Pipe → Receiver → Browser", đó là Mojo IPC model, không phải raw POSIX `pipe()`.
 
 ---
 
