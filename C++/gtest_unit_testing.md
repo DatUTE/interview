@@ -10,12 +10,12 @@
 
 **GoogleTest** (`gtest`) is a C++ unit testing framework. **GoogleMock** (`gmock`) adds mocks, matchers, and call expectations.
 
-| Tool | Purpose |
-|------|---------|
-| `gtest` | Test cases, assertions, fixtures, parameterized tests |
-| `gmock` | Mock interfaces, verify interactions, rich matchers |
-| `ctest` | CMake test runner; runs test executables in CI |
-| Sanitizers | ASan/TSan/UBSan catch runtime bugs during tests |
+| Tool       | Purpose                                               |
+| ---------- | ----------------------------------------------------- |
+| `gtest`    | Test cases, assertions, fixtures, parameterized tests |
+| `gmock`    | Mock interfaces, verify interactions, rich matchers   |
+| `ctest`    | CMake test runner; runs test executables in CI        |
+| Sanitizers | ASan/TSan/UBSan catch runtime bugs during tests       |
 
 Typical interview answer:
 
@@ -42,13 +42,13 @@ TEST(MathTest, AddReturnsSum) {
 
 Both families check a condition and report a test failure, but they differ in **control flow**.
 
-| Aspect | `EXPECT_*` | `ASSERT_*` |
-|--------|------------|------------|
-| Failure type | Non-fatal failure | Fatal failure |
-| After failure | Test continues | Current test function returns immediately |
-| Best for | Independent checks where more failure info is useful | Preconditions required for safe execution |
-| Common use | Validate multiple fields in a result | Stop before dereference, indexing, parsing-dependent checks |
-| Risk if overused | Test may continue after invalid state | Test may hide additional useful failures |
+| Aspect           | `EXPECT_*`                                           | `ASSERT_*`                                                  |
+| ---------------- | ---------------------------------------------------- | ----------------------------------------------------------- |
+| Failure type     | Non-fatal failure                                    | Fatal failure                                               |
+| After failure    | Test continues                                       | Current test function returns immediately                   |
+| Best for         | Independent checks where more failure info is useful | Preconditions required for safe execution                   |
+| Common use       | Validate multiple fields in a result                 | Stop before dereference, indexing, parsing-dependent checks |
+| Risk if overused | Test may continue after invalid state                | Test may hide additional useful failures                    |
 
 Rule of thumb:
 
@@ -139,6 +139,52 @@ TEST_F(LruCacheTest, EvictsLeastRecentlyUsedItem) {
 }
 ```
 
+### What are `SetUp()` and `TearDown()`?
+
+They are **virtual hook methods** of `::testing::Test` (empty by default). You override them in your fixture to prepare and clean up shared state around every test.
+
+| Hook         | Purpose                                             | Typical use                                                                       |
+| ------------ | --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `SetUp()`    | **Arrange** step shared by all tests in the fixture | Create objects under test, inject fakes/mocks, write temp files, seed data        |
+| `TearDown()` | **Cleanup** step after each test+                   | Delete temp files, reset global/singleton state, close handles, verify invariants |
+
+```cpp
+class ConfigLoaderTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        path_ = std::filesystem::temp_directory_path() / "cfg_test.json";
+        std::ofstream(path_) << R"({"port": 8080})";
+        loader_ = std::make_unique<ConfigLoader>(path_);
+    }
+
+    void TearDown() override {
+        std::filesystem::remove(path_);   // side effect outside the object -> needs explicit cleanup
+    }
+
+    std::filesystem::path path_;
+    std::unique_ptr<ConfigLoader> loader_; // RAII: destroyed automatically, no TearDown needed
+};
+
+TEST_F(ConfigLoaderTest, ReadsPort) {
+    ASSERT_TRUE(loader_->load());
+    EXPECT_EQ(loader_->port(), 8080);
+}
+```
+
+Key points:
+
+- **Spelling matters:** it is `SetUp`, not `Setup`. Always write `override` so the compiler catches a typo; otherwise you silently create a new method that is never called.
+- **Why not just the constructor/destructor?** You can use them for simple initialization. But `SetUp()`/`TearDown()` can use `ASSERT_`* (fatal assertions only work in `void` functions, and constructors cannot report a failure that way), and `TearDown()` may do work that could throw or fail, which is unsafe in a destructor.
+- **Failure in** `SetUp()`**:** if `SetUp()` hits a fatal failure (`ASSERT_`*, `GTEST_SKIP()`), the test body is **skipped**, but `TearDown()` **still runs**. So `TearDown()` must handle partially-initialized state.
+- **Per-suite variants:** `static void SetUpTestSuite()` / `static void TearDownTestSuite()` run **once** for the whole fixture (before the first test / after the last). Use them only for expensive, read-only resources (e.g., loading a large dataset), since shared mutable state couples tests.
+
+```
+SetUpTestSuite()                 // once
+  [fixture ctor -> SetUp() -> Test1 -> TearDown() -> fixture dtor]
+  [fixture ctor -> SetUp() -> Test2 -> TearDown() -> fixture dtor]
+TearDownTestSuite()              // once
+```
+
 ### When are `SetUp()` and `TearDown()` called?
 
 For every `TEST_F(FixtureName, TestName)`:
@@ -146,7 +192,7 @@ For every `TEST_F(FixtureName, TestName)`:
 1. gTest creates a **new** fixture object.
 2. `SetUp()` runs **before** the test body.
 3. The test body runs.
-4. `TearDown()` runs **after** the test body, even if the test failed or used `ASSERT_*`.
+4. `TearDown()` runs **after** the test body, even if the test failed or used `ASSERT_`*.
 5. The fixture object is destroyed.
 
 ```
@@ -154,17 +200,17 @@ per TEST_F:
   construct fixture -> SetUp() -> test body -> TearDown() -> destroy fixture
 ```
 
-| API | Calls `SetUp()` / `TearDown()`? |
-|-----|----------------------------------|
-| `TEST(...)` | No fixture; neither is called |
-| `TEST_F(...)` | Yes; once per test |
-| `TEST_P(...)` | Yes; once per parameter value |
+| API           | Calls `SetUp()` / `TearDown()`? |
+| ------------- | ------------------------------- |
+| `TEST(...)`   | No fixture; neither is called   |
+| `TEST_F(...)` | Yes; once per test              |
+| `TEST_P(...)` | Yes; once per parameter value   |
 
 Important details:
 
 - **Fresh state per test:** two `TEST_F(LruCacheTest, ...)` cases each get their own fixture instance and their own `SetUp()` call. State from test A does not leak into test B.
-- **`TearDown()` always runs** after the test body when using a fixture, including on failure. Do not rely on manual cleanup only at the end of the test function.
-- **Constructor vs `SetUp()`:** member initialization and constructor logic run first; put per-test preparation in `SetUp()`. Prefer RAII members (`std::unique_ptr`, temp dirs with destructors) over large `TearDown()` blocks.
+- `TearDown()` **always runs** after the test body when using a fixture, including on failure. Do not rely on manual cleanup only at the end of the test function.
+- **Constructor vs** `SetUp()`**:** member initialization and constructor logic run first; put per-test preparation in `SetUp()`. Prefer RAII members (`std::unique_ptr`, temp dirs with destructors) over large `TearDown()` blocks.
 - **No guaranteed order across tests:** `SetUp()`/`TearDown()` order between different tests is not part of the API contract unless you enforce it with fixtures that depend on each other (avoid that).
 
 ```cpp
@@ -177,6 +223,79 @@ protected:
 TEST_F(DemoTest, First) { /* own fixture instance */ }
 TEST_F(DemoTest, Second) { /* another fresh fixture instance */ }
 ```
+
+### Forgetting cleanup in `TearDown()`: memory leak example
+
+The `LruCacheTest` fixture above has no `TearDown()` and does **not** leak, because `cache` is a `std::unique_ptr`: the fixture is destroyed after each test, and the `unique_ptr` destructor frees the cache.
+
+Change it to a raw pointer and forget `TearDown()`, and every test leaks one cache:
+
+```cpp
+class LeakyLruCacheTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        cache = new LruCache<int, std::string>(2);   // allocated before every test
+    }
+
+    // No TearDown() -> nobody calls delete.
+    // The fixture destructor only destroys the pointer itself, not the object it points to.
+
+    LruCache<int, std::string>* cache = nullptr;
+};
+
+TEST_F(LeakyLruCacheTest, StoresItem) {
+    cache->put(1, "one");
+    EXPECT_TRUE(cache->contains(1));
+}                                   // leak #1: this test's cache is never freed
+
+TEST_F(LeakyLruCacheTest, EvictsOldest) {
+    cache->put(1, "one");
+    cache->put(2, "two");
+    cache->put(3, "three");
+    ASSERT_FALSE(cache->contains(1));
+}                                   // leak #2: new fixture, new cache, also never freed
+```
+
+All tests pass, so the leak is invisible unless you run under a leak detector. Build with AddressSanitizer on Linux/macOS (`-fsanitize=address`, which includes LeakSanitizer) and the run fails at exit with a report like:
+
+```
+==12345==ERROR: LeakSanitizer: detected memory leaks
+Direct leak of 64 byte(s) in 2 object(s) allocated from:
+    #0 operator new(unsigned long)
+    #1 LeakyLruCacheTest::SetUp() leaky_test.cpp:5
+    ...
+```
+
+The leak grows with the number of tests (and with `--gtest_repeat=N`), and the cache's own heap nodes leak too, not just the cache object.
+
+Two fixes:
+
+```cpp
+// Fix 1: free it in TearDown() (works, but easy to forget when the fixture grows)
+void TearDown() override {
+    delete cache;
+    cache = nullptr;
+}
+
+// Fix 2 (preferred): RAII member, no TearDown() needed
+std::unique_ptr<LruCache<int, std::string>> cache;
+```
+
+### What if a test fails, throws, or crashes?
+
+| What happens in the test | `TearDown()` + fixture destructor run? | Leak with `unique_ptr` member? | Leak with raw pointer + no `TearDown()`? |
+| ------------------------ | -------------------------------------- | ------------------------------ | ---------------------------------------- |
+| `EXPECT_*` fails | Yes, test body continues, then cleanup | No | Yes |
+| `ASSERT_*` fails | Yes, body returns early, then cleanup | No | Yes |
+| C++ exception thrown | Yes, gTest catches it and reports a failure | No | Yes |
+| Crash (segfault, `abort()`, `std::terminate`) | **No**, the process dies; remaining tests don't run | No (OS reclaims all process memory) | No (OS reclaims all process memory) |
+| Hang (infinite loop, deadlock) | No, until a timeout kills the process | No (OS reclaims memory) | No (OS reclaims memory) |
+
+Notes:
+
+- **A crash cannot leak heap memory**, because the OS frees the whole process. What a crash *can* leak is anything outside the process: temp files, lock files, shared memory, named pipes, DB rows, child processes. `TearDown()` doesn't help there because it never runs. Use unique temp names and remove leftovers at the start of `SetUp()`.
+- **Windows:** gTest also catches SEH exceptions such as access violations (`SEH exception with code 0xc0000005 thrown in the test body`), then runs `TearDown()` and continues. Memory may already be corrupted, so don't trust the rest of that run. LeakSanitizer isn't available with MSVC; use the CRT debug heap (`_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF)`) or run the tests on Linux with ASan.
+- **Isolate crashes:** with `gtest_discover_tests()` + `ctest`, each test runs in its own process, so one crash fails only that test. For code that is *expected* to crash, use `EXPECT_DEATH(...)`, which runs it in a child process.
 
 Rules of thumb:
 
@@ -245,13 +364,13 @@ Senior answer:
 
 A **test double** replaces a real dependency in a test. The key distinction is whether the test double only **provides data** or also **verifies interactions**.
 
-| Type | Purpose | Verifies calls? | Example |
-|------|---------|-----------------|---------|
-| **Dummy** | Passed only to satisfy a parameter | No | Unused callback object |
-| **Stub** | Returns predefined answers | No | Clock always returns `1000` |
-| **Fake** | Working lightweight implementation | Usually no | In-memory repository |
-| **Spy** | Records calls for later inspection | Yes, manually | Vector of published events |
-| **Mock** | Pre-programmed expectations | Yes, via framework | `EXPECT_CALL(repo, save(_))` |
+| Type      | Purpose                            | Verifies calls?    | Example                      |
+| --------- | ---------------------------------- | ------------------ | ---------------------------- |
+| **Dummy** | Passed only to satisfy a parameter | No                 | Unused callback object       |
+| **Stub**  | Returns predefined answers         | No                 | Clock always returns `1000`  |
+| **Fake**  | Working lightweight implementation | Usually no         | In-memory repository         |
+| **Spy**   | Records calls for later inspection | Yes, manually      | Vector of published events   |
+| **Mock**  | Pre-programmed expectations        | Yes, via framework | `EXPECT_CALL(repo, save(_))` |
 
 ### Dummy
 
@@ -476,20 +595,20 @@ using ::testing::StrictMock;
 EXPECT_CALL(repo, save(_)).Times(1).WillOnce(Return(true));
 ```
 
-| Mock style | Meaning |
-|------------|---------|
-| `NiceMock<T>` | Ignore uninteresting calls |
-| `NaggyMock<T>` | Warn on uninteresting calls (default-ish behavior) |
-| `StrictMock<T>` | Fail on unexpected calls |
+| Mock style      | Meaning                                            |
+| --------------- | -------------------------------------------------- |
+| `NiceMock<T>`   | Ignore uninteresting calls                         |
+| `NaggyMock<T>`  | Warn on uninteresting calls (default-ish behavior) |
+| `StrictMock<T>` | Fail on unexpected calls                           |
 
 Prefer `StrictMock` for small unit tests where unexpected calls signal a real bug.
 
 ### `ON_CALL` vs `EXPECT_CALL`
 
-| API | Meaning | Use when |
-|-----|---------|----------|
-| `ON_CALL(mock, method(...)).WillByDefault(...)` | Default behavior | Test needs a dependency response but call count is not the point |
-| `EXPECT_CALL(mock, method(...))` | Verification + optional behavior | The call itself is part of the requirement |
+| API                                             | Meaning                          | Use when                                                         |
+| ----------------------------------------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `ON_CALL(mock, method(...)).WillByDefault(...)` | Default behavior                 | Test needs a dependency response but call count is not the point |
+| `EXPECT_CALL(mock, method(...))`                | Verification + optional behavior | The call itself is part of the requirement                       |
 
 ```cpp
 ON_CALL(repo, find("u1")).WillByDefault(Return(User{"u1"}));
@@ -518,14 +637,14 @@ Need to enforce exact interaction contract?
   -> Mock
 ```
 
-| Situation | Prefer | Why |
-|-----------|--------|-----|
-| Expiry logic depends on time | Stub clock | Deterministic input |
-| Cache uses storage-like API | Fake repository | Natural stateful behavior |
-| Event publisher output is the result | Spy sink | Assert produced events |
-| Validation failure must not save | Mock repository | Interaction contract matters |
-| Retry logic must call service 3 times | Mock service | Call count/order matters |
-| Parsing pure function | No double | Just assert input/output |
+| Situation                             | Prefer          | Why                          |
+| ------------------------------------- | --------------- | ---------------------------- |
+| Expiry logic depends on time          | Stub clock      | Deterministic input          |
+| Cache uses storage-like API           | Fake repository | Natural stateful behavior    |
+| Event publisher output is the result  | Spy sink        | Assert produced events       |
+| Validation failure must not save      | Mock repository | Interaction contract matters |
+| Retry logic must call service 3 times | Mock service    | Call count/order matters     |
+| Parsing pure function                 | No double       | Just assert input/output     |
 
 Interview phrasing:
 
@@ -628,12 +747,12 @@ Repeat a flaky test:
 
 Recommended CI matrix:
 
-| Job | Purpose |
-|-----|---------|
-| Debug + gTest | Fast feedback |
-| ASan + UBSan | Use-after-free, overflow, UB |
-| TSan | Data races; often separate because it is slower |
-| Release smoke | Catch optimizer-dependent issues |
+| Job           | Purpose                                         |
+| ------------- | ----------------------------------------------- |
+| Debug + gTest | Fast feedback                                   |
+| ASan + UBSan  | Use-after-free, overflow, UB                    |
+| TSan          | Data races; often separate because it is slower |
+| Release smoke | Catch optimizer-dependent issues                |
 
 Example flags:
 
@@ -682,23 +801,23 @@ EXPECT_TRUE(worker.done());
 
 ## 13. Anti-patterns
 
-| Anti-pattern | Why it hurts | Better |
-|--------------|--------------|--------|
-| Testing only happy path | Misses boundary bugs | Add invalid input, empty, max-size, timeout |
-| Overusing mocks | Tests implementation, not behavior | Use stubs/fakes/spies unless call contract matters |
-| Confusing stub with mock | Tests become too strict | Stub answers data; mock verifies calls |
-| Sleeping in tests | Flaky and slow | Use deterministic synchronization |
-| Shared global state | Order-dependent failures | Fresh fixture per test |
-| Ignoring sanitizer tests | Memory/race bugs escape | Run ASan/TSan in CI |
-| Huge fixture setup | Hard to debug | Split into smaller units |
+| Anti-pattern             | Why it hurts                       | Better                                             |
+| ------------------------ | ---------------------------------- | -------------------------------------------------- |
+| Testing only happy path  | Misses boundary bugs               | Add invalid input, empty, max-size, timeout        |
+| Overusing mocks          | Tests implementation, not behavior | Use stubs/fakes/spies unless call contract matters |
+| Confusing stub with mock | Tests become too strict            | Stub answers data; mock verifies calls             |
+| Sleeping in tests        | Flaky and slow                     | Use deterministic synchronization                  |
+| Shared global state      | Order-dependent failures           | Fresh fixture per test                             |
+| Ignoring sanitizer tests | Memory/race bugs escape            | Run ASan/TSan in CI                                |
+| Huge fixture setup       | Hard to debug                      | Split into smaller units                           |
 
 ---
 
 ## 14. Interview Q&A
 
-**[Mid]** What is the difference between `EXPECT_*` and `ASSERT_*`?
+**[Mid]** What is the difference between `EXPECT_`* and `ASSERT_`*?
 
-> `EXPECT_*` records a **non-fatal** failure and continues the test. `ASSERT_*` records a **fatal** failure and returns from the current test function. Use `ASSERT_*` for preconditions where continuing is unsafe, for example null pointer checks, parse success, or vector size before indexing. Use `EXPECT_*` for independent result fields so one test run gives more diagnostic information.
+> `EXPECT_*` records a **non-fatal** failure and continues the test. `ASSERT_`* records a **fatal** failure and returns from the current test function. Use `ASSERT_`* for preconditions where continuing is unsafe, for example null pointer checks, parse success, or vector size before indexing. Use `EXPECT_`* for independent result fields so one test run gives more diagnostic information.
 
 ---
 
